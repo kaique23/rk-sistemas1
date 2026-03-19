@@ -1,0 +1,11 @@
+customtkinter
+requests
+pillow
+qrcode
+fastapi
+uvicorn
+bcrypt
+pyjwt
+psycopg2-binary
+pydantic
+email-validator
