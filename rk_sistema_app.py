@@ -31,23 +31,29 @@ class App(CTk):
             w.destroy()
 
     def request_json(self, method, url, **kwargs):
-        r = requests.request(method, url, timeout=15, **kwargs)
-        content_type = r.headers.get("content-type", "")
-        data = r.json() if "application/json" in content_type else {}
+        r = requests.request(method, url, timeout=20, **kwargs)
+        try:
+            data = r.json()
+        except Exception:
+            data = {"raw": r.text}
         return r, data
 
     def carregar_plano_atual(self):
         if not self.token or self.tipo_login.get() != "empresa":
             self.plano_nome = "—"
             return
+
         try:
             r, data = self.request_json(
                 "GET",
                 f"{self.api}/empresa/plano",
                 params={"token": self.token}
             )
+
             if r.status_code == 200:
                 self.plano_nome = data.get("plano_nome", "—")
+            else:
+                self.plano_nome = "—"
         except Exception:
             self.plano_nome = "—"
 
@@ -125,7 +131,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", f"Não foi possível entrar.\n{data.get('detail', r.text)}")
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showerror("Erro", f"Não foi possível entrar.\n{detalhe}")
                 return
 
             self.token = data["token"]
@@ -199,7 +206,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", data.get("detail", r.text))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showerror("Erro", detalhe)
                 return
 
             messagebox.showinfo("Sucesso", data.get("msg", "Empresa criada"))
@@ -224,7 +232,12 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", "Não foi possível carregar empresas.")
+                detalhe = empresas.get("detail", empresas.get("raw", r.text)) if isinstance(empresas, dict) else str(empresas)
+                messagebox.showerror("Erro", f"Não foi possível carregar as empresas.\n{detalhe}")
+                return
+
+            if not empresas:
+                CTkLabel(self.admin_lista_empresas, text="Nenhuma empresa cadastrada.").pack(pady=10)
                 return
 
             for empresa in empresas:
@@ -236,7 +249,7 @@ class App(CTk):
 
                 CTkLabel(
                     topo,
-                    text=f"{empresa['nome']}",
+                    text=f"{empresa.get('nome', '')}",
                     font=("Arial", 16, "bold")
                 ).pack(side="left")
 
@@ -248,58 +261,57 @@ class App(CTk):
 
                 CTkLabel(
                     card,
-                    text=f"Email: {empresa['email']} | Status: {empresa.get('status', '-')} | Vencimento: {empresa.get('vencimento', '-')}",
+                    text=f"Email: {empresa.get('email', '')} | Status: {empresa.get('status', '-')} | Vencimento: {empresa.get('vencimento', '-')}",
                 ).pack(anchor="w", padx=10, pady=8)
 
                 acoes = CTkFrame(card, fg_color="transparent")
                 acoes.pack(fill="x", padx=10, pady=(0, 10))
 
                 plano_var = StringVar(value="1")
-                planos_menu = CTkOptionMenu(
+                CTkOptionMenu(
                     acoes,
                     values=["1", "2", "3"],
                     variable=plano_var,
                     width=90
-                )
-                planos_menu.pack(side="left", padx=4)
+                ).pack(side="left", padx=4)
 
                 CTkButton(
                     acoes,
                     text="Trocar Plano",
                     width=120,
-                    command=lambda eid=empresa["id"], pv=plano_var: self.admin_trocar_plano(eid, pv.get())
+                    command=lambda eid=empresa.get("id"), pv=plano_var: self.admin_trocar_plano(eid, pv.get())
                 ).pack(side="left", padx=4)
 
                 CTkButton(
                     acoes,
                     text="Ativar",
                     width=80,
-                    command=lambda eid=empresa["id"]: self.admin_alterar_status(eid, "ativo")
+                    command=lambda eid=empresa.get("id"): self.admin_alterar_status(eid, "ativo")
                 ).pack(side="left", padx=4)
 
                 CTkButton(
                     acoes,
                     text="Pausar",
                     width=80,
-                    command=lambda eid=empresa["id"]: self.admin_alterar_status(eid, "pausado")
+                    command=lambda eid=empresa.get("id"): self.admin_alterar_status(eid, "pausado")
                 ).pack(side="left", padx=4)
 
                 CTkButton(
                     acoes,
                     text="Bloquear",
                     width=90,
-                    command=lambda eid=empresa["id"]: self.admin_alterar_status(eid, "bloqueado")
+                    command=lambda eid=empresa.get("id"): self.admin_alterar_status(eid, "bloqueado")
                 ).pack(side="left", padx=4)
 
                 CTkButton(
                     acoes,
                     text="Cancelar",
                     width=90,
-                    command=lambda eid=empresa["id"]: self.admin_alterar_status(eid, "cancelado")
+                    command=lambda eid=empresa.get("id"): self.admin_alterar_status(eid, "cancelado")
                 ).pack(side="left", padx=4)
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao carregar empresas.\n{e}")
+            messagebox.showerror("Erro", f"Não foi possível carregar as empresas.\n{e}")
 
     def admin_trocar_plano(self, empresa_id: int, plano_id: str):
         try:
@@ -314,7 +326,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", data.get("detail", r.text))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showerror("Erro", detalhe)
                 return
 
             messagebox.showinfo("Sucesso", data.get("msg", "Plano alterado"))
@@ -336,7 +349,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", data.get("detail", r.text))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showerror("Erro", detalhe)
                 return
 
             messagebox.showinfo("Sucesso", data.get("msg", "Status alterado"))
@@ -473,7 +487,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", data.get("detail", r.text))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showerror("Erro", detalhe)
                 return
 
             messagebox.showinfo("Sucesso", f"Item cadastrado com código {data.get('codigo', '')}")
@@ -498,7 +513,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", "Erro ao carregar itens.")
+                detalhe = itens.get("detail", itens.get("raw", r.text)) if isinstance(itens, dict) else str(itens)
+                messagebox.showerror("Erro", f"Erro ao carregar itens.\n{detalhe}")
                 return
 
             if not itens:
@@ -511,7 +527,7 @@ class App(CTk):
 
                 CTkLabel(
                     card,
-                    text=f"{item['nome']} | Código: {item['codigo']} | R$ {float(item['preco']):.2f} | Estoque: {item['estoque']}"
+                    text=f"{item.get('nome', '')} | Código: {item.get('codigo', '')} | R$ {float(item.get('preco', 0)):.2f} | Estoque: {item.get('estoque', 0)}"
                 ).pack(anchor="w", padx=10, pady=10)
 
         except Exception as e:
@@ -628,7 +644,8 @@ class App(CTk):
                 params={"token": self.token}
             )
             if r.status_code != 200:
-                messagebox.showwarning("Plano", data.get("detail", "Bloqueado"))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showwarning("Plano", detalhe)
                 return
             messagebox.showinfo("WhatsApp", data.get("msg", "Liberado"))
         except Exception as e:
@@ -642,7 +659,8 @@ class App(CTk):
                 params={"token": self.token}
             )
             if r.status_code != 200:
-                messagebox.showwarning("Plano", data.get("detail", "Bloqueado"))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showwarning("Plano", detalhe)
                 return
             messagebox.showinfo("Delivery", data.get("msg", "Liberado"))
         except Exception as e:
@@ -678,12 +696,12 @@ class App(CTk):
             self._set_entry(self.imp_porta, cfg.get("impressora_porta", ""))
             self._set_entry(self.imp_largura, cfg.get("impressora_largura", "80mm"))
 
-            self._set_check(self.pg_pix, cfg.get("pagamento_pix", 1))
-            self._set_check(self.pg_qrcode, cfg.get("pagamento_qrcode", 1))
-            self._set_check(self.pg_credito, cfg.get("pagamento_cartao_credito", 1))
-            self._set_check(self.pg_debito, cfg.get("pagamento_cartao_debito", 1))
-            self._set_check(self.pg_dinheiro, cfg.get("pagamento_dinheiro", 1))
-            self._set_check(self.imp_corte, cfg.get("impressora_corta_papel", 1))
+            self._set_check(self.pg_pix, cfg.get("pagamento_pix", True))
+            self._set_check(self.pg_qrcode, cfg.get("pagamento_qrcode", True))
+            self._set_check(self.pg_credito, cfg.get("pagamento_cartao_credito", True))
+            self._set_check(self.pg_debito, cfg.get("pagamento_cartao_debito", True))
+            self._set_check(self.pg_dinheiro, cfg.get("pagamento_dinheiro", True))
+            self._set_check(self.imp_corte, cfg.get("impressora_corta_papel", True))
 
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao carregar configurações.\n{e}")
@@ -714,7 +732,8 @@ class App(CTk):
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", data.get("detail", r.text))
+                detalhe = data.get("detail", data.get("raw", r.text))
+                messagebox.showerror("Erro", detalhe)
                 return
 
             messagebox.showinfo("Sucesso", data.get("msg", "Configurações salvas"))
@@ -730,10 +749,14 @@ class App(CTk):
                 f"{self.api}/produtos",
                 params={"token": self.token, "tipo": tipo}
             )
+
             if r.status_code != 200:
-                messagebox.showerror("Erro", "Erro ao carregar itens.")
+                detalhe = dados.get("detail", dados.get("raw", r.text)) if isinstance(dados, dict) else str(dados)
+                messagebox.showerror("Erro", f"Erro ao carregar itens.\n{detalhe}")
                 return
+
             self.render_produtos(dados)
+
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao carregar itens.\n{e}")
 
@@ -751,10 +774,14 @@ class App(CTk):
                 f"{self.api}/produtos/buscar",
                 params={"token": self.token, "nome": nome, "tipo": tipo}
             )
+
             if r.status_code != 200:
-                messagebox.showerror("Erro", "Erro na busca.")
+                detalhe = dados.get("detail", dados.get("raw", r.text)) if isinstance(dados, dict) else str(dados)
+                messagebox.showerror("Erro", f"Erro na busca.\n{detalhe}")
                 return
+
             self.render_produtos(dados)
+
         except Exception as e:
             messagebox.showerror("Erro", f"Erro na busca.\n{e}")
 
@@ -770,10 +797,10 @@ class App(CTk):
             item = CTkFrame(self.produtos_frame)
             item.pack(fill="x", padx=5, pady=6)
 
-            CTkLabel(item, text=p["nome"], font=("Arial", 15, "bold")).pack(anchor="w", padx=10, pady=(8, 0))
+            CTkLabel(item, text=p.get("nome", ""), font=("Arial", 15, "bold")).pack(anchor="w", padx=10, pady=(8, 0))
             CTkLabel(
                 item,
-                text=f"Código: {p['codigo']}   |   Preço: R$ {float(p['preco']):.2f}   |   Estoque: {p['estoque']}"
+                text=f"Código: {p.get('codigo', '')}   |   Preço: R$ {float(p.get('preco', 0)):.2f}   |   Estoque: {p.get('estoque', 0)}"
             ).pack(anchor="w", padx=10, pady=(0, 8))
 
             CTkButton(item, text="Adicionar", width=120, command=lambda x=p: self.add_prod(x)).pack(anchor="e", padx=10, pady=(0, 8))
@@ -785,10 +812,14 @@ class App(CTk):
                 f"{self.api}/adicionais",
                 params={"token": self.token}
             )
+
             if r.status_code != 200:
-                messagebox.showerror("Erro", "Erro ao carregar adicionais.")
+                detalhe = dados.get("detail", dados.get("raw", r.text)) if isinstance(dados, dict) else str(dados)
+                messagebox.showerror("Erro", f"Erro ao carregar adicionais.\n{detalhe}")
                 return
+
             self.render_adicionais(dados)
+
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao carregar adicionais.\n{e}")
 
@@ -804,17 +835,17 @@ class App(CTk):
             item = CTkFrame(self.adicionais_frame)
             item.pack(fill="x", padx=5, pady=4)
 
-            CTkLabel(item, text=f"{a['nome']}  |  +R$ {float(a['preco']):.2f}").pack(side="left", padx=10, pady=8)
+            CTkLabel(item, text=f"{a.get('nome', '')}  |  +R$ {float(a.get('preco', 0)):.2f}").pack(side="left", padx=10, pady=8)
             CTkButton(item, text="Adicionar", width=110, command=lambda x=a: self.add_add(x)).pack(side="right", padx=10, pady=6)
 
     def add_prod(self, p):
         self.carrinho.append(p)
-        self.total += float(p["preco"])
+        self.total += float(p.get("preco", 0))
         self.atualizar_carrinho()
 
     def add_add(self, a):
         self.adicionais.append(a)
-        self.total += float(a["preco"])
+        self.total += float(a.get("preco", 0))
         self.atualizar_carrinho()
 
     def obter_desconto(self):
@@ -833,13 +864,13 @@ class App(CTk):
             self.box.insert("end", "ITENS\n")
             self.box.insert("end", "------------------------------\n")
             for p in self.carrinho:
-                self.box.insert("end", f"{p['nome']}  -  R$ {float(p['preco']):.2f}\n")
+                self.box.insert("end", f"{p.get('nome', '')}  -  R$ {float(p.get('preco', 0)):.2f}\n")
 
         if self.adicionais:
             self.box.insert("end", "\nADICIONAIS\n")
             self.box.insert("end", "------------------------------\n")
             for a in self.adicionais:
-                self.box.insert("end", f"+ {a['nome']}  -  R$ {float(a['preco']):.2f}\n")
+                self.box.insert("end", f"+ {a.get('nome', '')}  -  R$ {float(a.get('preco', 0)):.2f}\n")
 
         desconto = self.obter_desconto()
         total_final = max(self.total - desconto, 0.0)
@@ -870,15 +901,16 @@ class App(CTk):
                 f"{self.api}/venda",
                 json={
                     "token": self.token,
-                    "itens": [p["id"] for p in self.carrinho],
-                    "adicionais": [a["id"] for a in self.adicionais],
+                    "itens": [p.get("id") for p in self.carrinho],
+                    "adicionais": [a.get("id") for a in self.adicionais],
                     "desconto": desconto,
                     "metodo_pagamento": self.pagamento_var.get()
                 }
             )
 
             if r.status_code != 200:
-                messagebox.showerror("Erro", f"Falha ao finalizar venda.\n{resposta.get('detail', r.text)}")
+                detalhe = resposta.get("detail", resposta.get("raw", r.text))
+                messagebox.showerror("Erro", f"Falha ao finalizar venda.\n{detalhe}")
                 return
 
             messagebox.showinfo(
@@ -897,7 +929,7 @@ class App(CTk):
         entry.insert(0, valor)
 
     def _set_check(self, checkbox, valor):
-        if int(valor) == 1:
+        if valor in (1, True, "1", "true", "True"):
             checkbox.select()
         else:
             checkbox.deselect()

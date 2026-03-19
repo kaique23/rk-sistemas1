@@ -326,21 +326,33 @@ def home():
     return {"status": "ok", "sistema": "RK Sistemas"}
 
 
-@app.post("/admin/login")
-def login_admin(data: Login):
+@app.post("/empresa/login")
+def login_empresa(data: Login):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id, senha FROM admin WHERE email = %s", (data.email,))
-    admin = cur.fetchone()
+    cur.execute("SELECT id, senha FROM empresas WHERE email = %s", (data.email,))
+    empresa = cur.fetchone()
 
     cur.close()
     conn.close()
 
-    if not admin or not bcrypt.checkpw(data.senha.encode(), admin["senha"].encode()):
-        raise HTTPException(status_code=401, detail="Login inválido")
+    if not empresa:
+        raise HTTPException(status_code=401, detail="Empresa não encontrada")
 
-    return {"token": gerar_token({"admin": admin["id"]})}
+    if isinstance(empresa, dict):
+        empresa_id = int(empresa["id"])
+        senha_hash = empresa["senha"]
+    else:
+        empresa_id = int(empresa[0])
+        senha_hash = empresa[1]
+
+    if not bcrypt.checkpw(data.senha.encode(), senha_hash.encode()):
+        raise HTTPException(status_code=401, detail="Senha inválida")
+
+    validar_empresa_ativa(empresa_id)
+
+    return {"token": gerar_token({"empresa": empresa_id})}
 
 
 @app.post("/admin/empresa")
