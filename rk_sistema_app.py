@@ -12,7 +12,7 @@ class App(CTk):
         self.title("RK Sistemas")
         self.geometry("1320x780")
 
-        self.api = "http://127.0.0.1:8000"
+        self.api = "https://rk-sistemas1.onrender.com"
         self.token = None
         self.tipo_login = StringVar(value="empresa")
 
