@@ -14,11 +14,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 def conectar():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL não configurada")
-
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    conn.autocommit = False
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     return conn
 
 
