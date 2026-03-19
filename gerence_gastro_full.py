@@ -14,7 +14,9 @@ import os
 import psycopg2
 
 def conectar():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    conn.autocommit = True
+    return conn
 
 
 def gerar_token(payload: dict) -> str:
