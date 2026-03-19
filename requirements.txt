@@ -1,11 +1,8 @@
-customtkinter
-requests
-pillow
-qrcode
 fastapi
 uvicorn
 bcrypt
-pyjwt
+PyJWT
 psycopg2-binary
 pydantic
 email-validator
+python-dotenv

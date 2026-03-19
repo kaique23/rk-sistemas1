@@ -1,21 +1,24 @@
+import os
 from contextlib import asynccontextmanager
 from typing import Literal
 
 import bcrypt
 import jwt
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
 
-SECRET = "rk_sistemas_secret_2026"
+SECRET = os.getenv("SECRET", "rk_sistemas_secret_2026")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-
-import os
-import psycopg2
 
 def conectar():
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    conn.autocommit = True
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL não configurada")
+
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    conn.autocommit = False
     return conn
 
 
@@ -45,18 +48,18 @@ def verificar_empresa(token: str) -> int:
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
-def gerar_codigo_unico(cur: sqlite3.Cursor, prefixo: str = "P") -> str:
+def gerar_codigo_unico(cur, prefixo: str = "P") -> str:
     while True:
         cur.execute("SELECT COALESCE(MAX(id), 0) + 1 AS proximo FROM produtos")
         proximo = int(cur.fetchone()["proximo"])
         codigo = f"{prefixo}{proximo:06d}"
 
-        cur.execute("SELECT id FROM produtos WHERE codigo = ?", (codigo,))
+        cur.execute("SELECT id FROM produtos WHERE codigo = %s", (codigo,))
         if not cur.fetchone():
             return codigo
 
 
-def obter_assinatura_empresa(empresa_id: int) -> sqlite3.Row:
+def obter_assinatura_empresa(empresa_id: int):
     conn = conectar()
     cur = conn.cursor()
 
@@ -75,11 +78,13 @@ def obter_assinatura_empresa(empresa_id: int) -> sqlite3.Row:
             p.financeiro
         FROM assinaturas a
         INNER JOIN planos p ON p.id = a.plano_id
-        WHERE a.empresa_id = ?
+        WHERE a.empresa_id = %s
         ORDER BY a.id DESC
         LIMIT 1
     """, (empresa_id,))
     assinatura = cur.fetchone()
+
+    cur.close()
     conn.close()
 
     if not assinatura:
@@ -103,10 +108,10 @@ def verificar_recurso_plano(empresa_id: int, recurso: str):
     validar_empresa_ativa(empresa_id)
     assinatura = obter_assinatura_empresa(empresa_id)
 
-    if recurso not in assinatura.keys():
+    if recurso not in assinatura:
         raise HTTPException(status_code=400, detail="Recurso inválido")
 
-    if int(assinatura[recurso]) != 1:
+    if not bool(assinatura[recurso]):
         raise HTTPException(
             status_code=403,
             detail=f"Recurso '{recurso}' não disponível no plano atual"
@@ -120,68 +125,68 @@ async def lifespan(app: FastAPI):
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS admin (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE,
-        senha TEXT
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        senha VARCHAR(255) NOT NULL
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS empresas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        senha TEXT NOT NULL
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        senha VARCHAR(255) NOT NULL
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS planos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT UNIQUE NOT NULL,
-        valor REAL NOT NULL,
-        whatsapp INTEGER DEFAULT 0,
-        delivery INTEGER DEFAULT 0,
-        relatorios INTEGER DEFAULT 1,
-        financeiro INTEGER DEFAULT 1
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(100) UNIQUE NOT NULL,
+        valor NUMERIC(10,2) NOT NULL,
+        whatsapp BOOLEAN DEFAULT FALSE,
+        delivery BOOLEAN DEFAULT FALSE,
+        relatorios BOOLEAN DEFAULT TRUE,
+        financeiro BOOLEAN DEFAULT TRUE
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS assinaturas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        empresa_id INTEGER NOT NULL,
-        plano_id INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'ativo',
-        vencimento TEXT
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+        plano_id INTEGER NOT NULL REFERENCES planos(id),
+        status VARCHAR(30) NOT NULL DEFAULT 'ativo',
+        vencimento DATE
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS produtos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        empresa_id INTEGER NOT NULL,
-        codigo TEXT UNIQUE NOT NULL,
-        nome TEXT NOT NULL,
-        preco REAL NOT NULL,
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+        codigo VARCHAR(20) UNIQUE NOT NULL,
+        nome VARCHAR(255) NOT NULL,
+        preco NUMERIC(10,2) NOT NULL,
         estoque INTEGER NOT NULL DEFAULT 0,
-        tipo TEXT NOT NULL DEFAULT 'produto'
+        tipo VARCHAR(20) NOT NULL DEFAULT 'produto'
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS adicionais (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        empresa_id INTEGER NOT NULL,
-        nome TEXT NOT NULL,
-        preco REAL NOT NULL
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+        nome VARCHAR(255) NOT NULL,
+        preco NUMERIC(10,2) NOT NULL
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS configuracoes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        empresa_id INTEGER UNIQUE NOT NULL,
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER UNIQUE NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
 
         whatsapp_numero TEXT DEFAULT '',
         whatsapp_token TEXT DEFAULT '',
@@ -191,44 +196,44 @@ async def lifespan(app: FastAPI):
         aiqfome_token TEXT DEFAULT '',
         uber_token TEXT DEFAULT '',
 
-        pagamento_pix INTEGER DEFAULT 1,
-        pagamento_qrcode INTEGER DEFAULT 1,
-        pagamento_cartao_credito INTEGER DEFAULT 1,
-        pagamento_cartao_debito INTEGER DEFAULT 1,
-        pagamento_dinheiro INTEGER DEFAULT 1,
+        pagamento_pix BOOLEAN DEFAULT TRUE,
+        pagamento_qrcode BOOLEAN DEFAULT TRUE,
+        pagamento_cartao_credito BOOLEAN DEFAULT TRUE,
+        pagamento_cartao_debito BOOLEAN DEFAULT TRUE,
+        pagamento_dinheiro BOOLEAN DEFAULT TRUE,
 
         impressora_nome TEXT DEFAULT '',
         impressora_porta TEXT DEFAULT '',
         impressora_largura TEXT DEFAULT '80mm',
-        impressora_corta_papel INTEGER DEFAULT 1
+        impressora_corta_papel BOOLEAN DEFAULT TRUE
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS mesas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        empresa_id INTEGER NOT NULL,
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
         numero INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'livre'
+        status VARCHAR(30) NOT NULL DEFAULT 'livre'
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS contas_financeiras (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        empresa_id INTEGER NOT NULL,
-        tipo TEXT NOT NULL,
-        descricao TEXT NOT NULL,
-        valor REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pendente'
+        id SERIAL PRIMARY KEY,
+        empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+        tipo VARCHAR(30) NOT NULL,
+        descricao VARCHAR(255) NOT NULL,
+        valor NUMERIC(10,2) NOT NULL,
+        status VARCHAR(30) NOT NULL DEFAULT 'pendente'
     )
     """)
 
-    cur.execute("SELECT id FROM admin WHERE email = ?", ("admin@rksistemas.com",))
+    cur.execute("SELECT id FROM admin WHERE email = %s", ("admin@rksistemas.com",))
     if not cur.fetchone():
         senha_hash = bcrypt.hashpw("Admin@123".encode(), bcrypt.gensalt()).decode()
         cur.execute(
-            "INSERT INTO admin (email, senha) VALUES (?, ?)",
+            "INSERT INTO admin (email, senha) VALUES (%s, %s)",
             ("admin@rksistemas.com", senha_hash)
         )
 
@@ -238,12 +243,17 @@ async def lifespan(app: FastAPI):
         cur.execute("""
             INSERT INTO planos (nome, valor, whatsapp, delivery, relatorios, financeiro)
             VALUES
-            ('Básico', 49.90, 0, 0, 1, 1),
-            ('Intermediário', 79.90, 1, 0, 1, 1),
-            ('Premium', 119.90, 1, 1, 1, 1)
-        """)
+            (%s, %s, %s, %s, %s, %s),
+            (%s, %s, %s, %s, %s, %s),
+            (%s, %s, %s, %s, %s, %s)
+        """, (
+            "Básico", 49.90, False, False, True, True,
+            "Intermediário", 79.90, True, False, True, True,
+            "Premium", 119.90, True, True, True, True,
+        ))
 
     conn.commit()
+    cur.close()
     conn.close()
     yield
 
@@ -292,21 +302,17 @@ class VendaCreate(BaseModel):
 
 class ConfiguracoesCreate(BaseModel):
     token: str
-
     whatsapp_numero: str = ""
     whatsapp_token: str = ""
     whatsapp_webhook: str = ""
-
     ifood_token: str = ""
     aiqfome_token: str = ""
     uber_token: str = ""
-
     pagamento_pix: bool = True
     pagamento_qrcode: bool = True
     pagamento_cartao_credito: bool = True
     pagamento_cartao_debito: bool = True
     pagamento_dinheiro: bool = True
-
     impressora_nome: str = ""
     impressora_porta: str = ""
     impressora_largura: str = "80mm"
@@ -323,8 +329,10 @@ def login_admin(data: Login):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id, senha FROM admin WHERE email = ?", (data.email,))
+    cur.execute("SELECT id, senha FROM admin WHERE email = %s", (data.email,))
     admin = cur.fetchone()
+
+    cur.close()
     conn.close()
 
     if not admin or not bcrypt.checkpw(data.senha.encode(), admin["senha"].encode()):
@@ -340,25 +348,26 @@ def criar_empresa(token: str, data: EmpresaCreate):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM empresas WHERE email = ?", (data.email,))
+    cur.execute("SELECT id FROM empresas WHERE email = %s", (data.email,))
     if cur.fetchone():
+        cur.close()
         conn.close()
         raise HTTPException(status_code=400, detail="Email já cadastrado")
 
     senha_hash = bcrypt.hashpw(data.senha.encode(), bcrypt.gensalt()).decode()
     cur.execute(
-        "INSERT INTO empresas (nome, email, senha) VALUES (?, ?, ?)",
+        "INSERT INTO empresas (nome, email, senha) VALUES (%s, %s, %s) RETURNING id",
         (data.nome, data.email, senha_hash)
     )
-    empresa_id = cur.lastrowid
+    empresa_id = int(cur.fetchone()["id"])
 
-    cur.execute("SELECT id FROM planos WHERE nome = 'Básico'")
+    cur.execute("SELECT id FROM planos WHERE nome = %s", ("Básico",))
     plano_basico = cur.fetchone()
     plano_id = int(plano_basico["id"])
 
     cur.execute("""
         INSERT INTO assinaturas (empresa_id, plano_id, status, vencimento)
-        VALUES (?, ?, 'ativo', date('now', '+30 day'))
+        VALUES (%s, %s, 'ativo', CURRENT_DATE + INTERVAL '30 days')
     """, (empresa_id, plano_id))
 
     cur.execute("""
@@ -371,10 +380,11 @@ def criar_empresa(token: str, data: EmpresaCreate):
             pagamento_dinheiro,
             impressora_largura,
             impressora_corta_papel
-        ) VALUES (?, 1, 1, 1, 1, 1, '80mm', 1)
+        ) VALUES (%s, TRUE, TRUE, TRUE, TRUE, TRUE, '80mm', TRUE)
     """, (empresa_id,))
 
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"msg": "Empresa criada com sucesso"}
@@ -401,9 +411,10 @@ def listar_empresas_admin(token: str):
         LEFT JOIN planos p ON p.id = a.plano_id
         ORDER BY e.nome
     """)
-    empresas = [dict(row) for row in cur.fetchall()]
-    conn.close()
+    empresas = cur.fetchall()
 
+    cur.close()
+    conn.close()
     return empresas
 
 
@@ -411,12 +422,15 @@ def listar_empresas_admin(token: str):
 def listar_planos():
     conn = conectar()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, nome, valor, whatsapp, delivery, relatorios, financeiro
         FROM planos
         ORDER BY valor
     """)
-    dados = [dict(row) for row in cur.fetchall()]
+    dados = cur.fetchall()
+
+    cur.close()
     conn.close()
     return dados
 
@@ -428,23 +442,26 @@ def trocar_plano_admin(token: str, empresa_id: int, plano_id: int):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM empresas WHERE id = ?", (empresa_id,))
+    cur.execute("SELECT id FROM empresas WHERE id = %s", (empresa_id,))
     if not cur.fetchone():
+        cur.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
 
-    cur.execute("SELECT id FROM planos WHERE id = ?", (plano_id,))
+    cur.execute("SELECT id FROM planos WHERE id = %s", (plano_id,))
     if not cur.fetchone():
+        cur.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Plano não encontrado")
 
     cur.execute("""
         UPDATE assinaturas
-        SET plano_id = ?, vencimento = date('now', '+30 day')
-        WHERE empresa_id = ?
+        SET plano_id = %s, vencimento = CURRENT_DATE + INTERVAL '30 days'
+        WHERE empresa_id = %s
     """, (plano_id, empresa_id))
 
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"msg": "Plano alterado com sucesso"}
@@ -461,18 +478,20 @@ def alterar_status_empresa(token: str, empresa_id: int, status: str):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM empresas WHERE id = ?", (empresa_id,))
+    cur.execute("SELECT id FROM empresas WHERE id = %s", (empresa_id,))
     if not cur.fetchone():
+        cur.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Empresa não encontrada")
 
     cur.execute("""
         UPDATE assinaturas
-        SET status = ?
-        WHERE empresa_id = ?
+        SET status = %s
+        WHERE empresa_id = %s
     """, (status, empresa_id))
 
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"msg": f"Status alterado para {status}"}
@@ -481,8 +500,7 @@ def alterar_status_empresa(token: str, empresa_id: int, status: str):
 @app.get("/empresa/plano")
 def plano_da_empresa(token: str):
     empresa_id = verificar_empresa(token)
-    assinatura = obter_assinatura_empresa(empresa_id)
-    return dict(assinatura)
+    return obter_assinatura_empresa(empresa_id)
 
 
 @app.post("/empresa/login")
@@ -490,16 +508,16 @@ def login_empresa(data: Login):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id, senha FROM empresas WHERE email = ?", (data.email,))
+    cur.execute("SELECT id, senha FROM empresas WHERE email = %s", (data.email,))
     empresa = cur.fetchone()
 
+    cur.close()
+    conn.close()
+
     if not empresa or not bcrypt.checkpw(data.senha.encode(), empresa["senha"].encode()):
-        conn.close()
         raise HTTPException(status_code=401, detail="Login inválido")
 
     empresa_id = int(empresa["id"])
-    conn.close()
-
     validar_empresa_ativa(empresa_id)
 
     return {"token": gerar_token({"empresa": empresa_id})}
@@ -517,10 +535,11 @@ def criar_produto(data: ProdutoCreate):
 
     cur.execute("""
         INSERT INTO produtos (empresa_id, codigo, nome, preco, estoque, tipo)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s)
     """, (empresa_id, codigo, data.nome, data.preco, data.estoque, data.tipo))
 
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"msg": "Item cadastrado", "codigo": codigo}
@@ -533,35 +552,37 @@ def listar_produtos(token: str, tipo: Literal["produto", "lanche"] = "produto"):
 
     conn = conectar()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, codigo, nome, preco, estoque, tipo
         FROM produtos
-        WHERE empresa_id = ? AND tipo = ?
+        WHERE empresa_id = %s AND tipo = %s
         ORDER BY nome
     """, (empresa_id, tipo))
-    dados = [dict(row) for row in cur.fetchall()]
+    dados = cur.fetchall()
+
+    cur.close()
     conn.close()
     return dados
 
 
 @app.get("/produtos/buscar")
-def buscar_produtos(
-    token: str,
-    nome: str,
-    tipo: Literal["produto", "lanche"] = "produto"
-):
+def buscar_produtos(token: str, nome: str, tipo: Literal["produto", "lanche"] = "produto"):
     empresa_id = verificar_empresa(token)
     validar_empresa_ativa(empresa_id)
 
     conn = conectar()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, codigo, nome, preco, estoque, tipo
         FROM produtos
-        WHERE empresa_id = ? AND tipo = ? AND nome LIKE ?
+        WHERE empresa_id = %s AND tipo = %s AND nome ILIKE %s
         ORDER BY nome
     """, (empresa_id, tipo, f"%{nome}%"))
-    dados = [dict(row) for row in cur.fetchall()]
+    dados = cur.fetchall()
+
+    cur.close()
     conn.close()
     return dados
 
@@ -573,11 +594,14 @@ def criar_adicional(data: AdicionalCreate):
 
     conn = conectar()
     cur = conn.cursor()
+
     cur.execute("""
         INSERT INTO adicionais (empresa_id, nome, preco)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (empresa_id, data.nome, data.preco))
+
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"msg": "Adicional cadastrado"}
@@ -590,13 +614,16 @@ def listar_adicionais(token: str):
 
     conn = conectar()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, nome, preco
         FROM adicionais
-        WHERE empresa_id = ?
+        WHERE empresa_id = %s
         ORDER BY nome
     """, (empresa_id,))
-    dados = [dict(row) for row in cur.fetchall()]
+    dados = cur.fetchall()
+
+    cur.close()
     conn.close()
     return dados
 
@@ -609,7 +636,7 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id FROM configuracoes WHERE empresa_id = ?", (empresa_id,))
+    cur.execute("SELECT id FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
     existe = cur.fetchone()
 
     valores = (
@@ -619,36 +646,36 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
         data.ifood_token,
         data.aiqfome_token,
         data.uber_token,
-        int(data.pagamento_pix),
-        int(data.pagamento_qrcode),
-        int(data.pagamento_cartao_credito),
-        int(data.pagamento_cartao_debito),
-        int(data.pagamento_dinheiro),
+        data.pagamento_pix,
+        data.pagamento_qrcode,
+        data.pagamento_cartao_credito,
+        data.pagamento_cartao_debito,
+        data.pagamento_dinheiro,
         data.impressora_nome,
         data.impressora_porta,
         data.impressora_largura,
-        int(data.impressora_corta_papel),
+        data.impressora_corta_papel,
     )
 
     if existe:
         cur.execute("""
             UPDATE configuracoes SET
-                whatsapp_numero = ?,
-                whatsapp_token = ?,
-                whatsapp_webhook = ?,
-                ifood_token = ?,
-                aiqfome_token = ?,
-                uber_token = ?,
-                pagamento_pix = ?,
-                pagamento_qrcode = ?,
-                pagamento_cartao_credito = ?,
-                pagamento_cartao_debito = ?,
-                pagamento_dinheiro = ?,
-                impressora_nome = ?,
-                impressora_porta = ?,
-                impressora_largura = ?,
-                impressora_corta_papel = ?
-            WHERE empresa_id = ?
+                whatsapp_numero = %s,
+                whatsapp_token = %s,
+                whatsapp_webhook = %s,
+                ifood_token = %s,
+                aiqfome_token = %s,
+                uber_token = %s,
+                pagamento_pix = %s,
+                pagamento_qrcode = %s,
+                pagamento_cartao_credito = %s,
+                pagamento_cartao_debito = %s,
+                pagamento_dinheiro = %s,
+                impressora_nome = %s,
+                impressora_porta = %s,
+                impressora_largura = %s,
+                impressora_corta_papel = %s
+            WHERE empresa_id = %s
         """, valores + (empresa_id,))
     else:
         cur.execute("""
@@ -659,10 +686,11 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
                 pagamento_cartao_credito, pagamento_cartao_debito, pagamento_dinheiro,
                 impressora_nome, impressora_porta, impressora_largura, impressora_corta_papel,
                 empresa_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, valores + (empresa_id,))
 
     conn.commit()
+    cur.close()
     conn.close()
 
     return {"msg": "Configurações salvas com sucesso"}
@@ -675,14 +703,17 @@ def obter_configuracoes(token: str):
 
     conn = conectar()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM configuracoes WHERE empresa_id = ?", (empresa_id,))
+
+    cur.execute("SELECT * FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
     row = cur.fetchone()
+
+    cur.close()
     conn.close()
 
     if not row:
         return {}
 
-    return dict(row)
+    return row
 
 
 @app.post("/whatsapp/teste")
@@ -707,18 +738,19 @@ def finalizar_venda(data: VendaCreate):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT * FROM configuracoes WHERE empresa_id = ?", (empresa_id,))
+    cur.execute("SELECT * FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
     cfg = cur.fetchone()
 
     if cfg:
         permitidos = {
-            "pix": int(cfg["pagamento_pix"]) == 1,
-            "qr_code": int(cfg["pagamento_qrcode"]) == 1,
-            "cartao_credito": int(cfg["pagamento_cartao_credito"]) == 1,
-            "cartao_debito": int(cfg["pagamento_cartao_debito"]) == 1,
-            "dinheiro": int(cfg["pagamento_dinheiro"]) == 1,
+            "pix": bool(cfg["pagamento_pix"]),
+            "qr_code": bool(cfg["pagamento_qrcode"]),
+            "cartao_credito": bool(cfg["pagamento_cartao_credito"]),
+            "cartao_debito": bool(cfg["pagamento_cartao_debito"]),
+            "dinheiro": bool(cfg["pagamento_dinheiro"]),
         }
         if not permitidos.get(data.metodo_pagamento, False):
+            cur.close()
             conn.close()
             raise HTTPException(
                 status_code=400,
@@ -728,13 +760,13 @@ def finalizar_venda(data: VendaCreate):
     total = 0.0
 
     for item_id in data.itens:
-        cur.execute("SELECT preco FROM produtos WHERE id = ?", (item_id,))
+        cur.execute("SELECT preco FROM produtos WHERE id = %s", (item_id,))
         row = cur.fetchone()
         if row:
             total += float(row["preco"])
 
     for adicional_id in data.adicionais:
-        cur.execute("SELECT preco FROM adicionais WHERE id = ?", (adicional_id,))
+        cur.execute("SELECT preco FROM adicionais WHERE id = %s", (adicional_id,))
         row = cur.fetchone()
         if row:
             total += float(row["preco"])
@@ -743,6 +775,7 @@ def finalizar_venda(data: VendaCreate):
     if total < 0:
         total = 0.0
 
+    cur.close()
     conn.close()
 
     return {
