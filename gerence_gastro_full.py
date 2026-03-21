@@ -81,21 +81,24 @@ def obter_assinatura_empresa(empresa_id: int):
 
 def validar_empresa_ativa(empresa_id: int):
     assinatura = obter_assinatura_empresa(empresa_id)
-    status = assinatura["status"]
-
-    if status != "ativo":
+    if assinatura["status"] != "ativo":
         raise HTTPException(
             status_code=403,
-            detail=f"Empresa com acesso bloqueado. Status atual: {status}"
+            detail=f"Empresa com acesso bloqueado. Status atual: {assinatura['status']}"
         )
 
 
 def verificar_recurso_plano(empresa_id: int, recurso: str):
-    validar_empresa_ativa(empresa_id)
     assinatura = obter_assinatura_empresa(empresa_id)
 
     if recurso not in assinatura:
         raise HTTPException(status_code=400, detail="Recurso inválido")
+
+    if assinatura["status"] != "ativo":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Empresa com acesso bloqueado. Status atual: {assinatura['status']}"
+        )
 
     if not bool(assinatura[recurso]):
         raise HTTPException(
@@ -184,21 +187,17 @@ async def lifespan(app: FastAPI):
     CREATE TABLE IF NOT EXISTS configuracoes (
         id SERIAL PRIMARY KEY,
         empresa_id INTEGER UNIQUE NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-
         whatsapp_numero TEXT DEFAULT '',
         whatsapp_token TEXT DEFAULT '',
         whatsapp_webhook TEXT DEFAULT '',
-
         ifood_token TEXT DEFAULT '',
         aiqfome_token TEXT DEFAULT '',
         uber_token TEXT DEFAULT '',
-
         pagamento_pix BOOLEAN DEFAULT TRUE,
         pagamento_qrcode BOOLEAN DEFAULT TRUE,
         pagamento_cartao_credito BOOLEAN DEFAULT TRUE,
         pagamento_cartao_debito BOOLEAN DEFAULT TRUE,
         pagamento_dinheiro BOOLEAN DEFAULT TRUE,
-
         impressora_nome TEXT DEFAULT '',
         impressora_porta TEXT DEFAULT '',
         impressora_largura TEXT DEFAULT '80mm',
@@ -227,7 +226,8 @@ async def lifespan(app: FastAPI):
     """)
 
     cur.execute("SELECT id FROM admin WHERE email = %s", ("admin@rksistemas.com",))
-    if not cur.fetchone():
+    admin = cur.fetchone()
+    if not admin:
         senha_hash = bcrypt.hashpw("Admin@123".encode(), bcrypt.gensalt()).decode()
         cur.execute(
             "INSERT INTO admin (email, senha) VALUES (%s, %s)",
@@ -300,21 +300,17 @@ class VendaCreate(BaseModel):
 
 class ConfiguracoesCreate(BaseModel):
     token: str
-
     whatsapp_numero: str = ""
     whatsapp_token: str = ""
     whatsapp_webhook: str = ""
-
     ifood_token: str = ""
     aiqfome_token: str = ""
     uber_token: str = ""
-
     pagamento_pix: bool = True
     pagamento_qrcode: bool = True
     pagamento_cartao_credito: bool = True
     pagamento_cartao_debito: bool = True
     pagamento_dinheiro: bool = True
-
     impressora_nome: str = ""
     impressora_porta: str = ""
     impressora_largura: str = "80mm"
@@ -326,33 +322,24 @@ def home():
     return {"status": "ok", "sistema": "RK Sistemas"}
 
 
-@app.post("/empresa/login")
-def login_empresa(data: Login):
+@app.post("/admin/login")
+def login_admin(data: Login):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("SELECT id, senha FROM empresas WHERE email = %s", (data.email,))
-    empresa = cur.fetchone()
+    cur.execute("SELECT id, senha FROM admin WHERE email = %s", (data.email,))
+    admin = cur.fetchone()
 
     cur.close()
     conn.close()
 
-    if not empresa:
-        raise HTTPException(status_code=401, detail="Empresa não encontrada")
+    if not admin:
+        raise HTTPException(status_code=401, detail="Admin não encontrado")
 
-    if isinstance(empresa, dict):
-        empresa_id = int(empresa["id"])
-        senha_hash = empresa["senha"]
-    else:
-        empresa_id = int(empresa[0])
-        senha_hash = empresa[1]
-
-    if not bcrypt.checkpw(data.senha.encode(), senha_hash.encode()):
+    if not bcrypt.checkpw(data.senha.encode(), admin["senha"].encode()):
         raise HTTPException(status_code=401, detail="Senha inválida")
 
-    validar_empresa_ativa(empresa_id)
-
-    return {"token": gerar_token({"empresa": empresa_id})}
+    return {"token": gerar_token({"admin": int(admin["id"])})}
 
 
 @app.post("/admin/empresa")
@@ -375,11 +362,11 @@ def criar_empresa(token: str, data: EmpresaCreate):
         VALUES (%s, %s, %s)
         RETURNING id
     """, (data.nome, data.email, senha_hash))
-
     empresa_id = int(cur.fetchone()["id"])
 
     cur.execute("SELECT id FROM planos WHERE nome = %s", ("Básico",))
-    plano_id = int(cur.fetchone()["id"])
+    plano = cur.fetchone()
+    plano_id = int(plano["id"])
 
     cur.execute("""
         INSERT INTO assinaturas (empresa_id, plano_id, status, vencimento)
@@ -427,7 +414,6 @@ def listar_empresas_admin(token: str):
         LEFT JOIN planos p ON p.id = a.plano_id
         ORDER BY e.nome
     """)
-
     empresas = cur.fetchall()
 
     cur.close()
@@ -445,7 +431,6 @@ def listar_planos():
         FROM planos
         ORDER BY valor
     """)
-
     dados = cur.fetchall()
 
     cur.close()
@@ -515,12 +500,6 @@ def alterar_status_empresa(token: str, empresa_id: int, status: str):
     return {"msg": f"Status alterado para {status}"}
 
 
-@app.get("/empresa/plano")
-def plano_da_empresa(token: str):
-    empresa_id = verificar_empresa(token)
-    return obter_assinatura_empresa(empresa_id)
-
-
 @app.post("/empresa/login")
 def login_empresa(data: Login):
     conn = conectar()
@@ -532,13 +511,24 @@ def login_empresa(data: Login):
     cur.close()
     conn.close()
 
-    if not empresa or not bcrypt.checkpw(data.senha.encode(), empresa["senha"].encode()):
-        raise HTTPException(status_code=401, detail="Login inválido")
+    if not empresa:
+        raise HTTPException(status_code=401, detail="Empresa não encontrada")
 
     empresa_id = int(empresa["id"])
+    senha_hash = empresa["senha"]
+
+    if not bcrypt.checkpw(data.senha.encode(), senha_hash.encode()):
+        raise HTTPException(status_code=401, detail="Senha inválida")
+
     validar_empresa_ativa(empresa_id)
 
     return {"token": gerar_token({"empresa": empresa_id})}
+
+
+@app.get("/empresa/plano")
+def plano_da_empresa(token: str):
+    empresa_id = verificar_empresa(token)
+    return obter_assinatura_empresa(empresa_id)
 
 
 @app.post("/produto")
@@ -577,7 +567,6 @@ def listar_produtos(token: str, tipo: Literal["produto", "lanche"] = "produto"):
         WHERE empresa_id = %s AND tipo = %s
         ORDER BY nome
     """, (empresa_id, tipo))
-
     dados = cur.fetchall()
 
     cur.close()
@@ -596,12 +585,9 @@ def buscar_produtos(token: str, nome: str, tipo: Literal["produto", "lanche"] = 
     cur.execute("""
         SELECT id, codigo, nome, preco, estoque, tipo
         FROM produtos
-        WHERE empresa_id = %s
-          AND tipo = %s
-          AND nome ILIKE %s
+        WHERE empresa_id = %s AND tipo = %s AND nome ILIKE %s
         ORDER BY nome
     """, (empresa_id, tipo, f"%{nome}%"))
-
     dados = cur.fetchall()
 
     cur.close()
@@ -643,7 +629,6 @@ def listar_adicionais(token: str):
         WHERE empresa_id = %s
         ORDER BY nome
     """, (empresa_id,))
-
     dados = cur.fetchall()
 
     cur.close()
@@ -772,6 +757,7 @@ def finalizar_venda(data: VendaCreate):
             "cartao_debito": bool(cfg["pagamento_cartao_debito"]),
             "dinheiro": bool(cfg["pagamento_dinheiro"]),
         }
+
         if not permitidos.get(data.metodo_pagamento, False):
             cur.close()
             conn.close()
