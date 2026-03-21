@@ -210,6 +210,7 @@ class App(CTk):
             return True
         return bool(self.permissoes_colaborador.get(perm, False))
 
+    # LOGIN
     def login_screen(self):
         self.clear()
         self.token = None
@@ -291,6 +292,7 @@ class App(CTk):
             self.permissoes_colaborador = data.get("permissoes", {})
             self.colaborador_dashboard_screen()
 
+    # SIDEBARS
     def admin_sidebar(self):
         for w in self.sidebar.winfo_children():
             w.destroy()
@@ -336,6 +338,7 @@ class App(CTk):
                 ).pack(fill="x", padx=12, pady=4)
                 idx += 1
 
+    # ADMIN
     def admin_empresas_screen(self):
         self._current_screen = self.admin_empresas_screen
         self.build_shell("Admin - Empresas")
@@ -448,6 +451,7 @@ class App(CTk):
 
         self._botao(frame, "Salvar módulos", salvar, color=COR_SUCESSO, hover=COR_SUCESSO_HOVER).pack(pady=15)
 
+    # EMPRESA
     def dashboard_screen(self):
         self._current_screen = self.dashboard_screen
         self.load_empresa_context()
@@ -613,6 +617,7 @@ class App(CTk):
 
         self._botao(frame, "Salvar permissões", salvar, color=COR_SUCESSO, hover=COR_SUCESSO_HOVER).pack(pady=15)
 
+    # COLABORADOR
     def colaborador_dashboard_screen(self):
         self._current_screen = self.colaborador_dashboard_screen
         self.build_shell("Colaborador - Dashboard")
