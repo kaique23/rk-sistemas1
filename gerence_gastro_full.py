@@ -11,13 +11,12 @@ from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
 
-
 SECRET = os.getenv("SECRET", "rk_sistemas_secret_2026")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 # =========================================================
-# CONFIG / DB
+# DB / AUTH
 # =========================================================
 
 def conectar():
@@ -26,32 +25,24 @@ def conectar():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-def agora_str() -> str:
-    return datetime.utcnow().isoformat()
-
-
 def gerar_token(payload: dict) -> str:
     return jwt.encode(payload, SECRET, algorithm="HS256")
 
 
-def senha_hash(texto: str) -> str:
+def hash_senha(texto: str) -> str:
     return bcrypt.hashpw(texto.encode(), bcrypt.gensalt()).decode()
 
 
-def senha_confere(texto: str, hash_salvo: str) -> bool:
-    return bcrypt.checkpw(texto.encode(), hash_salvo.encode())
+def confere_senha(texto: str, senha_hash: str) -> bool:
+    return bcrypt.checkpw(texto.encode(), senha_hash.encode())
 
-
-# =========================================================
-# AUTH / ACESSO
-# =========================================================
 
 def verificar_admin(token: str) -> int:
     try:
         data = jwt.decode(token, SECRET, algorithms=["HS256"])
         admin_id = data.get("admin")
         if not admin_id:
-            raise ValueError("token admin inválido")
+            raise ValueError
         return int(admin_id)
     except Exception:
         raise HTTPException(status_code=401, detail="Apenas admin")
@@ -62,7 +53,7 @@ def verificar_empresa(token: str) -> int:
         data = jwt.decode(token, SECRET, algorithms=["HS256"])
         empresa_id = data.get("empresa")
         if not empresa_id:
-            raise ValueError("token empresa inválido")
+            raise ValueError
         return int(empresa_id)
     except Exception:
         raise HTTPException(status_code=401, detail="Token inválido")
@@ -73,36 +64,15 @@ def verificar_garcom(token: str) -> int:
         data = jwt.decode(token, SECRET, algorithms=["HS256"])
         funcionario_id = data.get("funcionario")
         if not funcionario_id:
-            raise ValueError("token garçom inválido")
+            raise ValueError
         return int(funcionario_id)
     except Exception:
         raise HTTPException(status_code=401, detail="Token do garçom inválido")
 
 
-def obter_empresa_do_funcionario(funcionario_id: int) -> int:
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "SELECT empresa_id, cargo FROM funcionarios WHERE id = %s",
-            (funcionario_id,)
-        )
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Funcionário não encontrado")
+def gerar_codigo(prefixo: str) -> str:
+    return f"{prefixo}-{uuid.uuid4().hex[:10].upper()}"
 
-        if row["cargo"] not in ("garcom", "admin_empresa", "caixa"):
-            raise HTTPException(status_code=403, detail="Funcionário sem permissão")
-
-        return int(row["empresa_id"])
-    finally:
-        cur.close()
-        conn.close()
-
-
-# =========================================================
-# MÓDULOS / ASSINATURA
-# =========================================================
 
 MODULOS_VALIDOS = {
     "whatsapp",
@@ -117,6 +87,8 @@ MODULOS_VALIDOS = {
     "cadastro_clientes",
     "cadastro_fornecedores",
     "cadastro_funcionarios",
+    "aiqfome",
+    "comer_aqui",
 }
 
 
@@ -129,8 +101,7 @@ def obter_modulos_empresa(empresa_id: int) -> set[str]:
             FROM modulos_empresa
             WHERE empresa_id = %s AND ativo = TRUE
         """, (empresa_id,))
-        rows = cur.fetchall()
-        return {r["modulo"] for r in rows}
+        return {row["modulo"] for row in cur.fetchall()}
     finally:
         cur.close()
         conn.close()
@@ -139,15 +110,10 @@ def obter_modulos_empresa(empresa_id: int) -> set[str]:
 def exigir_modulo(empresa_id: int, modulo: str):
     if modulo not in MODULOS_VALIDOS:
         raise HTTPException(status_code=400, detail="Módulo inválido")
-
     validar_empresa_ativa(empresa_id)
-
     modulos = obter_modulos_empresa(empresa_id)
     if modulo not in modulos:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Módulo '{modulo}' não está ativo para esta empresa"
-        )
+        raise HTTPException(status_code=403, detail=f"Módulo '{modulo}' não ativo para esta empresa")
 
 
 def obter_assinatura_empresa(empresa_id: int):
@@ -169,18 +135,15 @@ def obter_assinatura_empresa(empresa_id: int):
             ORDER BY a.id DESC
             LIMIT 1
         """, (empresa_id,))
-        assinatura = cur.fetchone()
-
-        if not assinatura:
-            # fallback para não quebrar banco antigo
+        row = cur.fetchone()
+        if not row:
             return {
                 "status": "ativo",
                 "plano_nome": "Sem plano",
                 "valor": 0,
-                "vencimento": None,
+                "vencimento": None
             }
-
-        return assinatura
+        return row
     finally:
         cur.close()
         conn.close()
@@ -188,23 +151,34 @@ def obter_assinatura_empresa(empresa_id: int):
 
 def validar_empresa_ativa(empresa_id: int):
     assinatura = obter_assinatura_empresa(empresa_id)
-    status = assinatura["status"]
-    if status != "ativo":
+    if assinatura["status"] != "ativo":
         raise HTTPException(
             status_code=403,
-            detail=f"Empresa com acesso bloqueado. Status atual: {status}"
+            detail=f"Empresa com acesso bloqueado. Status atual: {assinatura['status']}"
         )
 
 
-# =========================================================
-# HELPERS
-# =========================================================
+def obter_empresa_do_funcionario(funcionario_id: int) -> int:
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT empresa_id, cargo, ativo
+            FROM funcionarios
+            WHERE id = %s
+        """, (funcionario_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Funcionário não encontrado")
+        if not row["ativo"]:
+            raise HTTPException(status_code=403, detail="Funcionário inativo")
+        return int(row["empresa_id"])
+    finally:
+        cur.close()
+        conn.close()
 
-def gerar_codigo(prefixo: str) -> str:
-    return f"{prefixo}-{uuid.uuid4().hex[:10].upper()}"
 
-
-def gerar_numero_comanda(cur, empresa_id: int) -> int:
+def numero_proxima_comanda(cur, empresa_id: int) -> int:
     cur.execute("""
         SELECT COALESCE(MAX(numero), 0) + 1 AS proximo
         FROM comandas
@@ -213,12 +187,10 @@ def gerar_numero_comanda(cur, empresa_id: int) -> int:
     return int(cur.fetchone()["proximo"])
 
 
-def semaforo_preparo(data_criacao: datetime, status: str) -> str:
+def semaforo_preparo(created_at: datetime, status: str) -> str:
     if status in ("pronto", "entregue", "cancelado"):
         return "ok"
-
-    minutos = (datetime.utcnow() - data_criacao).total_seconds() / 60.0
-
+    minutos = (datetime.utcnow() - created_at).total_seconds() / 60
     if minutos >= 30:
         return "atrasado"
     if minutos >= 15:
@@ -226,40 +198,15 @@ def semaforo_preparo(data_criacao: datetime, status: str) -> str:
     return "normal"
 
 
-def setor_da_categoria(empresa_id: int, categoria_id: int) -> str:
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT setor
-            FROM categorias
-            WHERE id = %s AND empresa_id = %s
-        """, (categoria_id, empresa_id))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Categoria não encontrada")
-        return row["setor"]
-    finally:
-        cur.close()
-        conn.close()
-
-
-def garantir_empresa_mesmo_escopo(entidade_empresa_id: int, empresa_id: int, nome: str):
-    if int(entidade_empresa_id) != int(empresa_id):
-        raise HTTPException(status_code=403, detail=f"{nome} não pertence a esta empresa")
-
-
 # =========================================================
-# STARTUP / MIGRATION
+# STARTUP
 # =========================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     conn = conectar()
     cur = conn.cursor()
-
     try:
-        # ---------------- ADMIN / EMPRESAS / PLANOS ----------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admin (
             id SERIAL PRIMARY KEY,
@@ -311,7 +258,40 @@ async def lifespan(app: FastAPI):
         )
         """)
 
-        # ---------------- CADASTROS ----------------
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS categorias (
+            id SERIAL PRIMARY KEY,
+            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+            nome VARCHAR(255) NOT NULL,
+            setor VARCHAR(20) NOT NULL DEFAULT 'cozinha',
+            ativo BOOLEAN NOT NULL DEFAULT TRUE
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS produtos (
+            id SERIAL PRIMARY KEY,
+            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+            categoria_id INTEGER REFERENCES categorias(id),
+            codigo VARCHAR(30) UNIQUE NOT NULL,
+            nome VARCHAR(255) NOT NULL,
+            preco NUMERIC(10,2) NOT NULL,
+            estoque INTEGER NOT NULL DEFAULT 0,
+            tipo VARCHAR(20) NOT NULL DEFAULT 'produto',
+            ativo BOOLEAN NOT NULL DEFAULT TRUE
+        )
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS adicionais (
+            id SERIAL PRIMARY KEY,
+            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+            nome VARCHAR(255) NOT NULL,
+            preco NUMERIC(10,2) NOT NULL,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE
+        )
+        """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS clientes (
             id SERIAL PRIMARY KEY,
@@ -352,42 +332,6 @@ async def lifespan(app: FastAPI):
         )
         """)
 
-        # ---------------- PRODUTOS / CATEGORIAS ----------------
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS categorias (
-            id SERIAL PRIMARY KEY,
-            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-            nome VARCHAR(255) NOT NULL,
-            setor VARCHAR(20) NOT NULL DEFAULT 'cozinha',
-            ativo BOOLEAN NOT NULL DEFAULT TRUE
-        )
-        """)
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS produtos (
-            id SERIAL PRIMARY KEY,
-            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-            categoria_id INTEGER REFERENCES categorias(id),
-            codigo VARCHAR(30) UNIQUE NOT NULL,
-            nome VARCHAR(255) NOT NULL,
-            preco NUMERIC(10,2) NOT NULL,
-            estoque INTEGER NOT NULL DEFAULT 0,
-            tipo VARCHAR(20) NOT NULL DEFAULT 'produto',
-            ativo BOOLEAN NOT NULL DEFAULT TRUE
-        )
-        """)
-
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS adicionais (
-            id SERIAL PRIMARY KEY,
-            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-            nome VARCHAR(255) NOT NULL,
-            preco NUMERIC(10,2) NOT NULL,
-            ativo BOOLEAN NOT NULL DEFAULT TRUE
-        )
-        """)
-
-        # ---------------- MESAS / COMANDAS / PEDIDOS ----------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS mesas (
             id SERIAL PRIMARY KEY,
@@ -463,7 +407,6 @@ async def lifespan(app: FastAPI):
         )
         """)
 
-        # ---------------- ENTREGAS / CHAMADOS ----------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS entregadores (
             id SERIAL PRIMARY KEY,
@@ -498,7 +441,6 @@ async def lifespan(app: FastAPI):
         )
         """)
 
-        # ---------------- CONFIG / FINANCEIRO ----------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             id SERIAL PRIMARY KEY,
@@ -506,8 +448,11 @@ async def lifespan(app: FastAPI):
             whatsapp_numero TEXT DEFAULT '',
             whatsapp_token TEXT DEFAULT '',
             whatsapp_webhook TEXT DEFAULT '',
-            ifood_token TEXT DEFAULT '',
             aiqfome_token TEXT DEFAULT '',
+            aiqfome_loja TEXT DEFAULT '',
+            comer_aqui_token TEXT DEFAULT '',
+            comer_aqui_loja TEXT DEFAULT '',
+            ifood_token TEXT DEFAULT '',
             uber_token TEXT DEFAULT '',
             pagamento_pix BOOLEAN DEFAULT TRUE,
             pagamento_qrcode BOOLEAN DEFAULT TRUE,
@@ -521,42 +466,34 @@ async def lifespan(app: FastAPI):
         )
         """)
 
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS contas_financeiras (
-            id SERIAL PRIMARY KEY,
-            empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-            tipo VARCHAR(30) NOT NULL,
-            descricao VARCHAR(255) NOT NULL,
-            valor NUMERIC(10,2) NOT NULL,
-            status VARCHAR(30) NOT NULL DEFAULT 'pendente',
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-        """)
-
-        # ---------------- MIGRAÇÕES SEGURAS ----------------
+        # migrações seguras
         cur.execute("ALTER TABLE assinaturas ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'ativo'")
         cur.execute("ALTER TABLE assinaturas ADD COLUMN IF NOT EXISTS vencimento DATE")
-
         cur.execute("ALTER TABLE planos ADD COLUMN IF NOT EXISTS whatsapp BOOLEAN DEFAULT FALSE")
         cur.execute("ALTER TABLE planos ADD COLUMN IF NOT EXISTS delivery BOOLEAN DEFAULT FALSE")
         cur.execute("ALTER TABLE planos ADD COLUMN IF NOT EXISTS relatorios BOOLEAN DEFAULT TRUE")
         cur.execute("ALTER TABLE planos ADD COLUMN IF NOT EXISTS financeiro BOOLEAN DEFAULT TRUE")
-
         cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS categoria_id INTEGER REFERENCES categorias(id)")
         cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo BOOLEAN NOT NULL DEFAULT TRUE")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS whatsapp_numero TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS whatsapp_token TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS whatsapp_webhook TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS aiqfome_token TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS aiqfome_loja TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS comer_aqui_token TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS comer_aqui_loja TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS ifood_token TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS uber_token TEXT DEFAULT ''")
 
-        # admin padrão
         cur.execute("SELECT id FROM admin WHERE email = %s", ("admin@rksistemas.com",))
         if not cur.fetchone():
             cur.execute(
                 "INSERT INTO admin (email, senha) VALUES (%s, %s)",
-                ("admin@rksistemas.com", senha_hash("Admin@123"))
+                ("admin@rksistemas.com", hash_senha("Admin@123"))
             )
 
-        # planos padrão
         cur.execute("SELECT COUNT(*) AS total FROM planos")
-        total_planos = int(cur.fetchone()["total"])
-        if total_planos == 0:
+        if int(cur.fetchone()["total"]) == 0:
             cur.execute("""
                 INSERT INTO planos (nome, valor, whatsapp, delivery, relatorios, financeiro)
                 VALUES
@@ -591,6 +528,12 @@ class EmpresaCreate(BaseModel):
     senha: str
 
 
+class ModuloBulkUpdate(BaseModel):
+    token: str
+    empresa_id: int
+    modulos: dict[str, bool]
+
+
 class ProdutoCreate(BaseModel):
     token: str
     categoria_id: int
@@ -598,31 +541,6 @@ class ProdutoCreate(BaseModel):
     preco: float
     estoque: int = 0
     tipo: Literal["produto", "lanche"] = "produto"
-
-
-class AdicionalCreate(BaseModel):
-    token: str
-    nome: str
-    preco: float
-
-
-class ConfiguracoesCreate(BaseModel):
-    token: str
-    whatsapp_numero: str = ""
-    whatsapp_token: str = ""
-    whatsapp_webhook: str = ""
-    ifood_token: str = ""
-    aiqfome_token: str = ""
-    uber_token: str = ""
-    pagamento_pix: bool = True
-    pagamento_qrcode: bool = True
-    pagamento_cartao_credito: bool = True
-    pagamento_cartao_debito: bool = True
-    pagamento_dinheiro: bool = True
-    impressora_nome: str = ""
-    impressora_porta: str = ""
-    impressora_largura: str = "80mm"
-    impressora_corta_papel: bool = True
 
 
 class CategoriaCreate(BaseModel):
@@ -702,25 +620,26 @@ class SaidaEntregaCreate(BaseModel):
     nome_entregador: str
 
 
-class ModuloUpdate(BaseModel):
+class ConfiguracoesCreate(BaseModel):
     token: str
-    empresa_id: int
-    modulo: str
-    ativo: bool
-
-
-class VendaCreate(BaseModel):
-    token: str
-    itens: list[int]
-    adicionais: list[int] = []
-    desconto: float = 0.0
-    metodo_pagamento: Literal[
-        "dinheiro",
-        "pix",
-        "qr_code",
-        "cartao_credito",
-        "cartao_debito"
-    ] = "dinheiro"
+    whatsapp_numero: str = ""
+    whatsapp_token: str = ""
+    whatsapp_webhook: str = ""
+    aiqfome_token: str = ""
+    aiqfome_loja: str = ""
+    comer_aqui_token: str = ""
+    comer_aqui_loja: str = ""
+    ifood_token: str = ""
+    uber_token: str = ""
+    pagamento_pix: bool = True
+    pagamento_qrcode: bool = True
+    pagamento_cartao_credito: bool = True
+    pagamento_cartao_debito: bool = True
+    pagamento_dinheiro: bool = True
+    impressora_nome: str = ""
+    impressora_porta: str = ""
+    impressora_largura: str = "80mm"
+    impressora_corta_papel: bool = True
 
 
 class LoginGarcom(BaseModel):
@@ -734,11 +653,7 @@ class LoginGarcom(BaseModel):
 
 @app.get("/")
 def home():
-    return {
-        "status": "ok",
-        "sistema": "RK Sistemas Completo",
-        "versao": "final_base_unificada"
-    }
+    return {"status": "ok", "sistema": "RK Sistemas Completo"}
 
 
 # =========================================================
@@ -754,10 +669,8 @@ def login_admin(data: Login):
         admin = cur.fetchone()
         if not admin:
             raise HTTPException(status_code=401, detail="Admin não encontrado")
-
-        if not senha_confere(data.senha, admin["senha"]):
+        if not confere_senha(data.senha, admin["senha"]):
             raise HTTPException(status_code=401, detail="Senha inválida")
-
         return {"token": gerar_token({"admin": int(admin["id"])})}
     finally:
         cur.close()
@@ -779,7 +692,7 @@ def criar_empresa(token: str, data: EmpresaCreate):
             INSERT INTO empresas (nome, email, senha)
             VALUES (%s, %s, %s)
             RETURNING id
-        """, (data.nome, data.email, senha_hash(data.senha)))
+        """, (data.nome, data.email, hash_senha(data.senha)))
         empresa_id = int(cur.fetchone()["id"])
 
         cur.execute("SELECT id FROM planos WHERE nome = 'Básico'")
@@ -791,12 +704,8 @@ def criar_empresa(token: str, data: EmpresaCreate):
             VALUES (%s, %s, 'ativo', %s)
         """, (empresa_id, plano_id, (datetime.utcnow() + timedelta(days=30)).date()))
 
-        cur.execute("""
-            INSERT INTO configuracoes (empresa_id)
-            VALUES (%s)
-        """, (empresa_id,))
+        cur.execute("INSERT INTO configuracoes (empresa_id) VALUES (%s)", (empresa_id,))
 
-        # módulos padrão desligados
         for modulo in sorted(MODULOS_VALIDOS):
             cur.execute("""
                 INSERT INTO modulos_empresa (empresa_id, modulo, ativo)
@@ -886,7 +795,7 @@ def trocar_plano_admin(token: str, empresa_id: int, plano_id: int):
 def alterar_status_empresa(token: str, empresa_id: int, status: str):
     verificar_admin(token)
 
-    if status not in {"ativo", "pausado", "cancelado", "bloqueado"}:
+    if status not in {"ativo", "pausado", "bloqueado", "cancelado"}:
         raise HTTPException(status_code=400, detail="Status inválido")
 
     conn = conectar()
@@ -907,6 +816,15 @@ def listar_modulos_empresa_admin(token: str, empresa_id: int):
     conn = conectar()
     cur = conn.cursor()
     try:
+        for modulo in MODULOS_VALIDOS:
+            cur.execute("""
+                INSERT INTO modulos_empresa (empresa_id, modulo, ativo)
+                VALUES (%s, %s, FALSE)
+                ON CONFLICT (empresa_id, modulo) DO NOTHING
+            """, (empresa_id, modulo))
+
+        conn.commit()
+
         cur.execute("""
             SELECT modulo, ativo
             FROM modulos_empresa
@@ -919,31 +837,32 @@ def listar_modulos_empresa_admin(token: str, empresa_id: int):
         conn.close()
 
 
-@app.post("/admin/empresa/modulo")
-def atualizar_modulo_empresa(data: ModuloUpdate):
+@app.post("/admin/empresa/modulos/salvar")
+def salvar_modulos_empresa(data: ModuloBulkUpdate):
     verificar_admin(data.token)
-
-    if data.modulo not in MODULOS_VALIDOS:
-        raise HTTPException(status_code=400, detail="Módulo inválido")
 
     conn = conectar()
     cur = conn.cursor()
     try:
-        cur.execute("""
-            INSERT INTO modulos_empresa (empresa_id, modulo, ativo)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (empresa_id, modulo)
-            DO UPDATE SET ativo = EXCLUDED.ativo
-        """, (data.empresa_id, data.modulo, data.ativo))
+        for modulo, ativo in data.modulos.items():
+            if modulo not in MODULOS_VALIDOS:
+                continue
+            cur.execute("""
+                INSERT INTO modulos_empresa (empresa_id, modulo, ativo)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (empresa_id, modulo)
+                DO UPDATE SET ativo = EXCLUDED.ativo
+            """, (data.empresa_id, modulo, bool(ativo)))
+
         conn.commit()
-        return {"msg": "Módulo atualizado com sucesso"}
+        return {"msg": "Módulos atualizados com sucesso"}
     finally:
         cur.close()
         conn.close()
 
 
 # =========================================================
-# EMPRESA / LOGIN
+# EMPRESA / GARÇOM
 # =========================================================
 
 @app.post("/empresa/login")
@@ -955,73 +874,10 @@ def login_empresa(data: Login):
         empresa = cur.fetchone()
         if not empresa:
             raise HTTPException(status_code=401, detail="Empresa não encontrada")
-
-        if not senha_confere(data.senha, empresa["senha"]):
+        if not confere_senha(data.senha, empresa["senha"]):
             raise HTTPException(status_code=401, detail="Senha inválida")
-
         validar_empresa_ativa(int(empresa["id"]))
         return {"token": gerar_token({"empresa": int(empresa["id"])})}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/empresa/plano")
-def plano_da_empresa(token: str):
-    empresa_id = verificar_empresa(token)
-    assinatura = obter_assinatura_empresa(empresa_id)
-    modulos = sorted(list(obter_modulos_empresa(empresa_id)))
-    assinatura["modulos_ativos"] = modulos
-    return assinatura
-
-
-# =========================================================
-# FUNCIONÁRIOS / GARÇOM
-# =========================================================
-
-@app.post("/funcionarios")
-def criar_funcionario(data: FuncionarioCreate):
-    empresa_id = verificar_empresa(data.token)
-    exigir_modulo(empresa_id, "cadastro_funcionarios")
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            INSERT INTO funcionarios (empresa_id, nome, telefone, email, senha, cargo)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (
-            empresa_id,
-            data.nome,
-            data.telefone,
-            data.email,
-            senha_hash(data.senha) if data.senha else "",
-            data.cargo
-        ))
-        funcionario_id = int(cur.fetchone()["id"])
-        conn.commit()
-        return {"msg": "Funcionário cadastrado", "id": funcionario_id}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/funcionarios")
-def listar_funcionarios(token: str):
-    empresa_id = verificar_empresa(token)
-    exigir_modulo(empresa_id, "cadastro_funcionarios")
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT id, nome, telefone, email, cargo, ativo
-            FROM funcionarios
-            WHERE empresa_id = %s
-            ORDER BY nome
-        """, (empresa_id,))
-        return cur.fetchall()
     finally:
         cur.close()
         conn.close()
@@ -1038,33 +894,142 @@ def login_garcom(data: LoginGarcom):
             WHERE email = %s
         """, (data.email,))
         func = cur.fetchone()
-
         if not func:
             raise HTTPException(status_code=401, detail="Funcionário não encontrado")
         if not func["ativo"]:
             raise HTTPException(status_code=403, detail="Funcionário inativo")
-        if func["cargo"] not in ("garcom", "admin_empresa", "caixa"):
-            raise HTTPException(status_code=403, detail="Cargo sem acesso")
+        if not func["senha"]:
+            raise HTTPException(status_code=401, detail="Funcionário sem senha")
+        if not confere_senha(data.senha, func["senha"]):
+            raise HTTPException(status_code=401, detail="Senha inválida")
 
         exigir_modulo(int(func["empresa_id"]), "app_garcom")
 
-        if not func["senha"]:
-            raise HTTPException(status_code=401, detail="Funcionário sem senha cadastrada")
-        if not senha_confere(data.senha, func["senha"]):
-            raise HTTPException(status_code=401, detail="Senha inválida")
-
-        return {
-            "token": gerar_token({"funcionario": int(func["id"])}),
-            "empresa_id": int(func["empresa_id"])
-        }
+        return {"token": gerar_token({"funcionario": int(func["id"])})}
     finally:
         cur.close()
         conn.close()
 
 
+@app.get("/empresa/plano")
+def plano_da_empresa(token: str):
+    empresa_id = verificar_empresa(token)
+    assinatura = obter_assinatura_empresa(empresa_id)
+    assinatura["modulos_ativos"] = sorted(list(obter_modulos_empresa(empresa_id)))
+    return assinatura
+
+
 # =========================================================
-# CLIENTES / FORNECEDORES
+# CADASTROS
 # =========================================================
+
+@app.post("/categorias")
+def criar_categoria(data: CategoriaCreate):
+    empresa_id = verificar_empresa(data.token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO categorias (empresa_id, nome, setor)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        """, (empresa_id, data.nome, data.setor))
+        categoria_id = int(cur.fetchone()["id"])
+        conn.commit()
+        return {"msg": "Categoria criada", "id": categoria_id}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/categorias")
+def listar_categorias(token: str):
+    empresa_id = verificar_empresa(token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, nome, setor, ativo
+            FROM categorias
+            WHERE empresa_id = %s
+            ORDER BY nome
+        """, (empresa_id,))
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/produto")
+def criar_produto(data: ProdutoCreate):
+    empresa_id = verificar_empresa(data.token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id FROM categorias
+            WHERE id = %s AND empresa_id = %s
+        """, (data.categoria_id, empresa_id))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Categoria não encontrada")
+
+        codigo = gerar_codigo("P")
+
+        cur.execute("""
+            INSERT INTO produtos (empresa_id, categoria_id, codigo, nome, preco, estoque, tipo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (empresa_id, data.categoria_id, codigo, data.nome, data.preco, data.estoque, data.tipo))
+        conn.commit()
+        return {"msg": "Item cadastrado", "codigo": codigo}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/produtos")
+def listar_produtos(token: str, tipo: Literal["produto", "lanche"] = "produto"):
+    empresa_id = verificar_empresa(token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT
+                p.id, p.codigo, p.nome, p.preco, p.estoque, p.tipo, p.ativo,
+                c.id AS categoria_id,
+                c.nome AS categoria_nome,
+                c.setor
+            FROM produtos p
+            LEFT JOIN categorias c ON c.id = p.categoria_id
+            WHERE p.empresa_id = %s AND p.tipo = %s
+            ORDER BY p.nome
+        """, (empresa_id, tipo))
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/produtos/buscar")
+def buscar_produtos(token: str, nome: str, tipo: Literal["produto", "lanche"] = "produto"):
+    empresa_id = verificar_empresa(token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT
+                p.id, p.codigo, p.nome, p.preco, p.estoque, p.tipo,
+                c.nome AS categoria_nome,
+                c.setor
+            FROM produtos p
+            LEFT JOIN categorias c ON c.id = p.categoria_id
+            WHERE p.empresa_id = %s AND p.tipo = %s AND p.nome ILIKE %s
+            ORDER BY p.nome
+        """, (empresa_id, tipo, f"%{nome}%"))
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
 
 @app.post("/clientes")
 def criar_cliente(data: ClienteCreate):
@@ -1079,9 +1044,9 @@ def criar_cliente(data: ClienteCreate):
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (empresa_id, data.nome, data.telefone, data.email, data.documento, data.observacoes))
-        cliente_id = int(cur.fetchone()["id"])
+        cid = int(cur.fetchone()["id"])
         conn.commit()
-        return {"msg": "Cliente cadastrado", "id": cliente_id}
+        return {"msg": "Cliente cadastrado", "id": cid}
     finally:
         cur.close()
         conn.close()
@@ -1120,9 +1085,9 @@ def criar_fornecedor(data: FornecedorCreate):
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (empresa_id, data.nome, data.telefone, data.email, data.documento, data.observacoes))
-        fornecedor_id = int(cur.fetchone()["id"])
+        fid = int(cur.fetchone()["id"])
         conn.commit()
-        return {"msg": "Fornecedor cadastrado", "id": fornecedor_id}
+        return {"msg": "Fornecedor cadastrado", "id": fid}
     finally:
         cur.close()
         conn.close()
@@ -1148,162 +1113,45 @@ def listar_fornecedores(token: str):
         conn.close()
 
 
-# =========================================================
-# CATEGORIAS / PRODUTOS / ADICIONAIS
-# =========================================================
-
-@app.post("/categorias")
-def criar_categoria(data: CategoriaCreate):
+@app.post("/funcionarios")
+def criar_funcionario(data: FuncionarioCreate):
     empresa_id = verificar_empresa(data.token)
+    exigir_modulo(empresa_id, "cadastro_funcionarios")
 
     conn = conectar()
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT INTO categorias (empresa_id, nome, setor)
-            VALUES (%s, %s, %s)
+            INSERT INTO funcionarios (empresa_id, nome, telefone, email, senha, cargo)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (empresa_id, data.nome, data.setor))
-        categoria_id = int(cur.fetchone()["id"])
-        conn.commit()
-        return {"msg": "Categoria criada", "id": categoria_id}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/categorias")
-def listar_categorias(token: str):
-    empresa_id = verificar_empresa(token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT id, nome, setor, ativo
-            FROM categorias
-            WHERE empresa_id = %s
-            ORDER BY nome
-        """, (empresa_id,))
-        return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.post("/produto")
-def criar_produto(data: ProdutoCreate):
-    empresa_id = verificar_empresa(data.token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT id FROM categorias
-            WHERE id = %s AND empresa_id = %s
-        """, (data.categoria_id, empresa_id))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Categoria não encontrada")
-
-        codigo = gerar_codigo("P")
-
-        cur.execute("""
-            INSERT INTO produtos (empresa_id, categoria_id, codigo, nome, preco, estoque, tipo)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             empresa_id,
-            data.categoria_id,
-            codigo,
             data.nome,
-            data.preco,
-            data.estoque,
-            data.tipo
+            data.telefone,
+            data.email,
+            hash_senha(data.senha) if data.senha else "",
+            data.cargo
         ))
-
+        fid = int(cur.fetchone()["id"])
         conn.commit()
-        return {"msg": "Item cadastrado", "codigo": codigo}
+        return {"msg": "Funcionário cadastrado", "id": fid}
     finally:
         cur.close()
         conn.close()
 
 
-@app.get("/produtos")
-def listar_produtos(token: str, tipo: Literal["produto", "lanche"] = "produto"):
+@app.get("/funcionarios")
+def listar_funcionarios(token: str):
     empresa_id = verificar_empresa(token)
+    exigir_modulo(empresa_id, "cadastro_funcionarios")
 
     conn = conectar()
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT
-                p.id, p.codigo, p.nome, p.preco, p.estoque, p.tipo, p.ativo,
-                c.id AS categoria_id,
-                c.nome AS categoria_nome,
-                c.setor
-            FROM produtos p
-            LEFT JOIN categorias c ON c.id = p.categoria_id
-            WHERE p.empresa_id = %s AND p.tipo = %s
-            ORDER BY p.nome
-        """, (empresa_id, tipo))
-        return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/produtos/buscar")
-def buscar_produtos(token: str, nome: str, tipo: Literal["produto", "lanche"] = "produto"):
-    empresa_id = verificar_empresa(token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT
-                p.id, p.codigo, p.nome, p.preco, p.estoque, p.tipo,
-                c.nome AS categoria_nome,
-                c.setor
-            FROM produtos p
-            LEFT JOIN categorias c ON c.id = p.categoria_id
-            WHERE p.empresa_id = %s
-              AND p.tipo = %s
-              AND p.nome ILIKE %s
-            ORDER BY p.nome
-        """, (empresa_id, tipo, f"%{nome}%"))
-        return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.post("/adicionais")
-def criar_adicional(data: AdicionalCreate):
-    empresa_id = verificar_empresa(data.token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            INSERT INTO adicionais (empresa_id, nome, preco)
-            VALUES (%s, %s, %s)
-        """, (empresa_id, data.nome, data.preco))
-        conn.commit()
-        return {"msg": "Adicional cadastrado"}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/adicionais")
-def listar_adicionais(token: str):
-    empresa_id = verificar_empresa(token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            SELECT id, nome, preco, ativo
-            FROM adicionais
+            SELECT id, nome, telefone, email, cargo, ativo
+            FROM funcionarios
             WHERE empresa_id = %s
             ORDER BY nome
         """, (empresa_id,))
@@ -1314,16 +1162,22 @@ def listar_adicionais(token: str):
 
 
 # =========================================================
-# MESAS / QR / CHAMADOS
+# MESAS / CHAMADOS
 # =========================================================
 
 @app.post("/mesas")
 def criar_mesa(data: MesaCreate):
     empresa_id = verificar_empresa(data.token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
+        cur.execute("""
+            SELECT id FROM mesas
+            WHERE empresa_id = %s AND numero = %s
+        """, (empresa_id, data.numero))
+        if cur.fetchone():
+            raise HTTPException(status_code=400, detail="Já existe uma mesa com esse número")
+
         qr_code = gerar_codigo("MESA")
         cur.execute("""
             INSERT INTO mesas (empresa_id, numero, status, qr_code)
@@ -1341,7 +1195,6 @@ def criar_mesa(data: MesaCreate):
 @app.get("/mesas")
 def listar_mesas(token: str):
     empresa_id = verificar_empresa(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -1402,7 +1255,6 @@ def qr_pedir_conta(mesa_id: int):
 @app.get("/chamados")
 def listar_chamados(token: str):
     empresa_id = verificar_empresa(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -1430,36 +1282,24 @@ def criar_comanda(data: ComandaCreate):
     conn = conectar()
     cur = conn.cursor()
     try:
-        numero = gerar_numero_comanda(cur, empresa_id)
+        numero = numero_proxima_comanda(cur, empresa_id)
 
         if data.mesa_id:
-            cur.execute("SELECT empresa_id FROM mesas WHERE id = %s", (data.mesa_id,))
-            mesa = cur.fetchone()
-            if not mesa:
+            cur.execute("SELECT id FROM mesas WHERE id = %s AND empresa_id = %s", (data.mesa_id, empresa_id))
+            if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Mesa não encontrada")
-            garantir_empresa_mesmo_escopo(mesa["empresa_id"], empresa_id, "Mesa")
-
             cur.execute("UPDATE mesas SET status = 'ocupada' WHERE id = %s", (data.mesa_id,))
 
         if data.cliente_id:
-            cur.execute("SELECT empresa_id FROM clientes WHERE id = %s", (data.cliente_id,))
-            cli = cur.fetchone()
-            if not cli:
+            cur.execute("SELECT id FROM clientes WHERE id = %s AND empresa_id = %s", (data.cliente_id, empresa_id))
+            if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Cliente não encontrado")
-            garantir_empresa_mesmo_escopo(cli["empresa_id"], empresa_id, "Cliente")
 
         cur.execute("""
             INSERT INTO comandas (empresa_id, numero, mesa_id, cliente_id, origem, status, observacoes)
             VALUES (%s, %s, %s, %s, %s, 'aberta', %s)
             RETURNING id
-        """, (
-            empresa_id,
-            numero,
-            data.mesa_id,
-            data.cliente_id,
-            data.origem,
-            data.observacoes
-        ))
+        """, (empresa_id, numero, data.mesa_id, data.cliente_id, data.origem, data.observacoes))
         comanda_id = int(cur.fetchone()["id"])
 
         conn.commit()
@@ -1472,28 +1312,22 @@ def criar_comanda(data: ComandaCreate):
 @app.get("/comandas")
 def listar_comandas(token: str, status: Optional[str] = None):
     empresa_id = verificar_empresa(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
+        base = """
+            SELECT c.*, m.numero AS mesa_numero, cl.nome AS cliente_nome
+            FROM comandas c
+            LEFT JOIN mesas m ON m.id = c.mesa_id
+            LEFT JOIN clientes cl ON cl.id = c.cliente_id
+            WHERE c.empresa_id = %s
+        """
+        params = [empresa_id]
         if status:
-            cur.execute("""
-                SELECT c.*, m.numero AS mesa_numero, cl.nome AS cliente_nome
-                FROM comandas c
-                LEFT JOIN mesas m ON m.id = c.mesa_id
-                LEFT JOIN clientes cl ON cl.id = c.cliente_id
-                WHERE c.empresa_id = %s AND c.status = %s
-                ORDER BY c.created_at DESC
-            """, (empresa_id, status))
-        else:
-            cur.execute("""
-                SELECT c.*, m.numero AS mesa_numero, cl.nome AS cliente_nome
-                FROM comandas c
-                LEFT JOIN mesas m ON m.id = c.mesa_id
-                LEFT JOIN clientes cl ON cl.id = c.cliente_id
-                WHERE c.empresa_id = %s
-                ORDER BY c.created_at DESC
-            """, (empresa_id,))
+            base += " AND c.status = %s"
+            params.append(status)
+        base += " ORDER BY c.created_at DESC"
+        cur.execute(base, tuple(params))
         return cur.fetchall()
     finally:
         cur.close()
@@ -1506,14 +1340,13 @@ def criar_comanda_garcom(token: str, mesa_id: Optional[int] = None, cliente_id: 
     empresa_id = obter_empresa_do_funcionario(funcionario_id)
     exigir_modulo(empresa_id, "app_garcom")
 
-    dados = ComandaCreate(
+    return criar_comanda(ComandaCreate(
         token=gerar_token({"empresa": empresa_id}),
         mesa_id=mesa_id,
         cliente_id=cliente_id,
         origem="garcom",
         observacoes=""
-    )
-    return criar_comanda(dados)
+    ))
 
 
 @app.post("/pedidos")
@@ -1523,38 +1356,31 @@ def criar_pedido(data: PedidoCreate):
     conn = conectar()
     cur = conn.cursor()
     try:
-        # valida comanda
         cur.execute("""
-            SELECT id, empresa_id, mesa_id, cliente_id, status
+            SELECT id, mesa_id, cliente_id, status
             FROM comandas
-            WHERE id = %s
-        """, (data.comanda_id,))
+            WHERE id = %s AND empresa_id = %s
+        """, (data.comanda_id, empresa_id))
         comanda = cur.fetchone()
         if not comanda:
             raise HTTPException(status_code=404, detail="Comanda não encontrada")
-        garantir_empresa_mesmo_escopo(comanda["empresa_id"], empresa_id, "Comanda")
-
         if comanda["status"] != "aberta":
             raise HTTPException(status_code=400, detail="Comanda não está aberta")
-
         if not data.itens:
             raise HTTPException(status_code=400, detail="Pedido sem itens")
 
-        # divide itens por setor via categoria
-        setores_map: dict[str, list[ItemPedidoIn]] = {"cozinha": [], "bar": []}
+        setores_map = {"cozinha": [], "bar": []}
 
         for item in data.itens:
             cur.execute("""
-                SELECT p.id, p.nome, p.preco, p.empresa_id, c.setor
+                SELECT p.id, p.nome, p.preco, c.setor
                 FROM produtos p
                 LEFT JOIN categorias c ON c.id = p.categoria_id
-                WHERE p.id = %s
-            """, (item.produto_id,))
+                WHERE p.id = %s AND p.empresa_id = %s
+            """, (item.produto_id, empresa_id))
             prod = cur.fetchone()
             if not prod:
                 raise HTTPException(status_code=404, detail=f"Produto {item.produto_id} não encontrado")
-            garantir_empresa_mesmo_escopo(prod["empresa_id"], empresa_id, "Produto")
-
             setor = prod["setor"] or "cozinha"
             setores_map[setor].append(item)
 
@@ -1594,8 +1420,8 @@ def criar_pedido(data: PedidoCreate):
                 cur.execute("""
                     SELECT id, nome, preco
                     FROM produtos
-                    WHERE id = %s
-                """, (item.produto_id,))
+                    WHERE id = %s AND empresa_id = %s
+                """, (item.produto_id, empresa_id))
                 prod = cur.fetchone()
 
                 cur.execute("""
@@ -1614,7 +1440,6 @@ def criar_pedido(data: PedidoCreate):
                 ))
                 pedido_item_id = int(cur.fetchone()["id"])
 
-                # baixa estoque simples
                 cur.execute("""
                     UPDATE produtos
                     SET estoque = GREATEST(estoque - %s, 0)
@@ -1623,13 +1448,12 @@ def criar_pedido(data: PedidoCreate):
 
                 for adicional_id in item.adicionais_ids:
                     cur.execute("""
-                        SELECT id, nome, preco, empresa_id
+                        SELECT id, nome, preco
                         FROM adicionais
-                        WHERE id = %s
-                    """, (adicional_id,))
+                        WHERE id = %s AND empresa_id = %s
+                    """, (adicional_id, empresa_id))
                     add = cur.fetchone()
                     if add:
-                        garantir_empresa_mesmo_escopo(add["empresa_id"], empresa_id, "Adicional")
                         cur.execute("""
                             INSERT INTO pedido_adicionais (pedido_item_id, adicional_id, nome_adicional, preco)
                             VALUES (%s, %s, %s, %s)
@@ -1644,26 +1468,9 @@ def criar_pedido(data: PedidoCreate):
         conn.close()
 
 
-@app.post("/garcom/pedidos")
-def criar_pedido_garcom(token: str, comanda_id: int, itens: list[ItemPedidoIn], observacoes: str = ""):
-    funcionario_id = verificar_garcom(token)
-    empresa_id = obter_empresa_do_funcionario(funcionario_id)
-    exigir_modulo(empresa_id, "app_garcom")
-
-    dados = PedidoCreate(
-        token=gerar_token({"empresa": empresa_id}),
-        comanda_id=comanda_id,
-        itens=itens,
-        origem="garcom",
-        observacoes=observacoes
-    )
-    return criar_pedido(dados)
-
-
 @app.get("/pedidos")
 def listar_pedidos(token: str, status: Optional[str] = None, setor: Optional[str] = None):
     empresa_id = verificar_empresa(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -1679,7 +1486,7 @@ def listar_pedidos(token: str, status: Optional[str] = None, setor: Optional[str
             LEFT JOIN clientes cl ON cl.id = p.cliente_id
             WHERE p.empresa_id = %s
         """
-        params: list = [empresa_id]
+        params = [empresa_id]
 
         if status:
             query += " AND p.status = %s"
@@ -1689,20 +1496,15 @@ def listar_pedidos(token: str, status: Optional[str] = None, setor: Optional[str
             params.append(setor)
 
         query += " ORDER BY p.created_at ASC"
-
         cur.execute(query, tuple(params))
-        pedidos = cur.fetchall()
+        rows = cur.fetchall()
 
-        for pedido in pedidos:
+        for pedido in rows:
             created_at = pedido["created_at"]
-            if isinstance(created_at, datetime):
-                pedido["semaforo"] = semaforo_preparo(created_at, pedido["status"])
-                pedido["minutos_aberto"] = int((datetime.utcnow() - created_at).total_seconds() / 60)
-            else:
-                pedido["semaforo"] = "normal"
-                pedido["minutos_aberto"] = 0
+            pedido["semaforo"] = semaforo_preparo(created_at, pedido["status"]) if isinstance(created_at, datetime) else "normal"
+            pedido["minutos_aberto"] = int((datetime.utcnow() - created_at).total_seconds() / 60) if isinstance(created_at, datetime) else 0
 
-        return pedidos
+        return rows
     finally:
         cur.close()
         conn.close()
@@ -1711,17 +1513,13 @@ def listar_pedidos(token: str, status: Optional[str] = None, setor: Optional[str
 @app.get("/pedidos/{pedido_id}/itens")
 def detalhes_itens_pedido(pedido_id: int, token: str):
     empresa_id = verificar_empresa(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT empresa_id FROM pedidos WHERE id = %s
-        """, (pedido_id,))
+        cur.execute("SELECT empresa_id FROM pedidos WHERE id = %s", (pedido_id,))
         ped = cur.fetchone()
-        if not ped:
+        if not ped or int(ped["empresa_id"]) != empresa_id:
             raise HTTPException(status_code=404, detail="Pedido não encontrado")
-        garantir_empresa_mesmo_escopo(ped["empresa_id"], empresa_id, "Pedido")
 
         cur.execute("""
             SELECT id, produto_id, nome_produto, preco, quantidade, observacoes
@@ -1749,26 +1547,19 @@ def detalhes_itens_pedido(pedido_id: int, token: str):
 @app.post("/pedidos/{pedido_id}/status")
 def atualizar_status_pedido(pedido_id: int, data: PedidoStatusUpdate):
     empresa_id = verificar_empresa(data.token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT empresa_id, status
-            FROM pedidos
-            WHERE id = %s
-        """, (pedido_id,))
+        cur.execute("SELECT empresa_id FROM pedidos WHERE id = %s", (pedido_id,))
         ped = cur.fetchone()
-        if not ped:
+        if not ped or int(ped["empresa_id"]) != empresa_id:
             raise HTTPException(status_code=404, detail="Pedido não encontrado")
-        garantir_empresa_mesmo_escopo(ped["empresa_id"], empresa_id, "Pedido")
 
         cur.execute("UPDATE pedidos SET status = %s WHERE id = %s", (data.status, pedido_id))
         cur.execute("""
             INSERT INTO pedido_eventos (pedido_id, evento, descricao)
             VALUES (%s, 'status', %s)
         """, (pedido_id, f"Status alterado para {data.status}"))
-
         conn.commit()
         return {"msg": "Status atualizado com sucesso"}
     finally:
@@ -1795,7 +1586,7 @@ def kds_bar(token: str):
 
 
 # =========================================================
-# DELIVERY / ENTREGA
+# DELIVERY
 # =========================================================
 
 @app.post("/entregadores")
@@ -1811,9 +1602,9 @@ def criar_entregador(data: EntregadorCreate):
             VALUES (%s, %s, %s)
             RETURNING id
         """, (empresa_id, data.nome, data.telefone))
-        entregador_id = int(cur.fetchone()["id"])
+        eid = int(cur.fetchone()["id"])
         conn.commit()
-        return {"msg": "Entregador cadastrado", "id": entregador_id}
+        return {"msg": "Entregador cadastrado", "id": eid}
     finally:
         cur.close()
         conn.close()
@@ -1848,14 +1639,13 @@ def sair_para_entrega(pedido_id: int, data: SaidaEntregaCreate):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT id, empresa_id, qr_entrega
+            SELECT id, qr_entrega
             FROM pedidos
-            WHERE id = %s
-        """, (pedido_id,))
+            WHERE id = %s AND empresa_id = %s
+        """, (pedido_id, empresa_id))
         pedido = cur.fetchone()
         if not pedido:
             raise HTTPException(status_code=404, detail="Pedido não encontrado")
-        garantir_empresa_mesmo_escopo(pedido["empresa_id"], empresa_id, "Pedido")
 
         codigo = pedido["qr_entrega"] or gerar_codigo("ENTR")
 
@@ -1870,13 +1660,7 @@ def sair_para_entrega(pedido_id: int, data: SaidaEntregaCreate):
         cur.execute("""
             INSERT INTO entregas (empresa_id, pedido_id, nome_entregador, codigo_bip, status)
             VALUES (%s, %s, %s, %s, 'saiu_entrega')
-            ON CONFLICT DO NOTHING
         """, (empresa_id, pedido_id, data.nome_entregador, codigo))
-
-        cur.execute("""
-            INSERT INTO pedido_eventos (pedido_id, evento, descricao)
-            VALUES (%s, 'entrega', %s)
-        """, (pedido_id, f"Saiu para entrega com {data.nome_entregador}"))
 
         conn.commit()
         return {"msg": "Pedido saiu para entrega", "codigo_bip": codigo}
@@ -1891,10 +1675,10 @@ def bipar_entrega(codigo_bip: str):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT e.id, e.pedido_id
-            FROM entregas e
-            WHERE e.codigo_bip = %s
-            ORDER BY e.id DESC
+            SELECT id, pedido_id
+            FROM entregas
+            WHERE codigo_bip = %s
+            ORDER BY id DESC
             LIMIT 1
         """, (codigo_bip,))
         entrega = cur.fetchone()
@@ -1904,7 +1688,6 @@ def bipar_entrega(codigo_bip: str):
         cur.execute("UPDATE entregas SET status = 'saiu_entrega' WHERE id = %s", (entrega["id"],))
         cur.execute("UPDATE pedidos SET status_entrega = 'saiu_entrega' WHERE id = %s", (entrega["pedido_id"],))
         conn.commit()
-
         return {"msg": "Pedido entrou em rota de entrega"}
     finally:
         cur.close()
@@ -1914,6 +1697,20 @@ def bipar_entrega(codigo_bip: str):
 # =========================================================
 # CONFIG
 # =========================================================
+
+@app.get("/configuracoes")
+def obter_configuracoes(token: str):
+    empresa_id = verificar_empresa(token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
+        row = cur.fetchone()
+        return row if row else {}
+    finally:
+        cur.close()
+        conn.close()
+
 
 @app.post("/configuracoes/salvar")
 def salvar_configuracoes(data: ConfiguracoesCreate):
@@ -1929,8 +1726,11 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
             data.whatsapp_numero,
             data.whatsapp_token,
             data.whatsapp_webhook,
-            data.ifood_token,
             data.aiqfome_token,
+            data.aiqfome_loja,
+            data.comer_aqui_token,
+            data.comer_aqui_loja,
+            data.ifood_token,
             data.uber_token,
             data.pagamento_pix,
             data.pagamento_qrcode,
@@ -1949,8 +1749,11 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
                     whatsapp_numero = %s,
                     whatsapp_token = %s,
                     whatsapp_webhook = %s,
-                    ifood_token = %s,
                     aiqfome_token = %s,
+                    aiqfome_loja = %s,
+                    comer_aqui_token = %s,
+                    comer_aqui_loja = %s,
+                    ifood_token = %s,
                     uber_token = %s,
                     pagamento_pix = %s,
                     pagamento_qrcode = %s,
@@ -1967,13 +1770,15 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
             cur.execute("""
                 INSERT INTO configuracoes (
                     whatsapp_numero, whatsapp_token, whatsapp_webhook,
-                    ifood_token, aiqfome_token, uber_token,
+                    aiqfome_token, aiqfome_loja,
+                    comer_aqui_token, comer_aqui_loja,
+                    ifood_token, uber_token,
                     pagamento_pix, pagamento_qrcode,
                     pagamento_cartao_credito, pagamento_cartao_debito, pagamento_dinheiro,
                     impressora_nome, impressora_porta, impressora_largura, impressora_corta_papel,
                     empresa_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, valores + (empresa_id,))
 
         conn.commit()
@@ -1983,85 +1788,15 @@ def salvar_configuracoes(data: ConfiguracoesCreate):
         conn.close()
 
 
-@app.get("/configuracoes")
-def obter_configuracoes(token: str):
-    empresa_id = verificar_empresa(token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT * FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
-        row = cur.fetchone()
-        return row if row else {}
-    finally:
-        cur.close()
-        conn.close()
-
-
 @app.post("/whatsapp/teste")
 def teste_whatsapp(token: str):
     empresa_id = verificar_empresa(token)
     exigir_modulo(empresa_id, "whatsapp")
-    return {"msg": "WhatsApp liberado neste plano"}
+    return {"msg": "WhatsApp liberado neste sistema"}
 
 
 @app.post("/delivery/teste")
 def teste_delivery(token: str):
     empresa_id = verificar_empresa(token)
     exigir_modulo(empresa_id, "delivery")
-    return {"msg": "Delivery liberado neste plano"}
-
-
-# =========================================================
-# VENDA RÁPIDA / COMPATIBILIDADE
-# =========================================================
-
-@app.post("/venda")
-def finalizar_venda(data: VendaCreate):
-    empresa_id = verificar_empresa(data.token)
-
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT * FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
-        cfg = cur.fetchone()
-
-        if cfg:
-            permitidos = {
-                "pix": bool(cfg["pagamento_pix"]),
-                "qr_code": bool(cfg["pagamento_qrcode"]),
-                "cartao_credito": bool(cfg["pagamento_cartao_credito"]),
-                "cartao_debito": bool(cfg["pagamento_cartao_debito"]),
-                "dinheiro": bool(cfg["pagamento_dinheiro"]),
-            }
-            if not permitidos.get(data.metodo_pagamento, False):
-                raise HTTPException(status_code=400, detail="Método de pagamento desabilitado")
-
-        total = 0.0
-
-        for item_id in data.itens:
-            cur.execute("SELECT preco, empresa_id FROM produtos WHERE id = %s", (item_id,))
-            row = cur.fetchone()
-            if row:
-                garantir_empresa_mesmo_escopo(row["empresa_id"], empresa_id, "Produto")
-                total += float(row["preco"])
-
-        for adicional_id in data.adicionais:
-            cur.execute("SELECT preco, empresa_id FROM adicionais WHERE id = %s", (adicional_id,))
-            row = cur.fetchone()
-            if row:
-                garantir_empresa_mesmo_escopo(row["empresa_id"], empresa_id, "Adicional")
-                total += float(row["preco"])
-
-        total -= float(data.desconto)
-        if total < 0:
-            total = 0.0
-
-        return {
-            "msg": "Venda finalizada",
-            "metodo_pagamento": data.metodo_pagamento,
-            "total": round(total, 2)
-        }
-    finally:
-        cur.close()
-        conn.close()
+    return {"msg": "Delivery liberado neste sistema"}

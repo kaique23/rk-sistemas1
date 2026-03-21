@@ -6,27 +6,22 @@ set_appearance_mode("dark")
 set_default_color_theme("blue")
 
 
-# =========================================================
-# APP
-# =========================================================
-
 class App(CTk):
     def __init__(self):
         super().__init__()
         self.title("RK Sistemas Completo")
-        self.geometry("1480x860")
+        self.geometry("1500x880")
 
         self.api = "https://rk-sistemas1.onrender.com"
-
         self.token = None
         self.tipo_login = StringVar(value="empresa")
-        self.usuario_tipo = None  # admin / empresa / garcom
-
+        self.usuario_tipo = None
         self.plano_nome = "—"
         self.modulos_ativos = []
 
         self.sidebar = None
         self.content = None
+        self._current_screen = None
 
         self.login_screen()
 
@@ -46,21 +41,16 @@ class App(CTk):
             data = {"raw": r.text}
         return r, data
 
-    def show_api_error(self, title, data, fallback="Erro"):
+    def api_error(self, title, data, fallback="Erro"):
         if isinstance(data, dict):
-            detail = data.get("detail") or data.get("raw") or fallback
+            msg = data.get("detail") or data.get("raw") or fallback
         else:
-            detail = str(data)
-        messagebox.showerror(title, detail)
+            msg = str(data)
+        messagebox.showerror(title, msg)
 
-    def set_entry(self, entry, value):
-        entry.delete(0, "end")
-        entry.insert(0, str(value))
-
-    def clear_content(self):
-        if self.content:
-            for w in self.content.winfo_children():
-                w.destroy()
+    def refresh_screen(self):
+        if callable(self._current_screen):
+            self._current_screen()
 
     def build_shell(self, title):
         self.clear()
@@ -74,14 +64,10 @@ class App(CTk):
         right.pack(side="right", padx=10)
 
         if self.usuario_tipo == "empresa":
-            CTkLabel(
-                right,
-                text=f"Plano: {self.plano_nome}",
-                font=("Arial", 12)
-            ).pack(side="left", padx=8)
+            CTkLabel(right, text=f"Plano: {self.plano_nome}", font=("Arial", 12)).pack(side="left", padx=6)
 
-        CTkButton(right, text="Atualizar", width=100, command=self.refresh_current_screen).pack(side="left", padx=5)
-        CTkButton(right, text="Sair", width=90, command=self.login_screen).pack(side="left", padx=5)
+        CTkButton(right, text="Atualizar", width=90, command=self.refresh_screen).pack(side="left", padx=4)
+        CTkButton(right, text="Sair", width=80, command=self.login_screen).pack(side="left", padx=4)
 
         main = CTkFrame(self)
         main.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -93,9 +79,27 @@ class App(CTk):
         self.content = CTkFrame(main)
         self.content.pack(side="right", fill="both", expand=True)
 
-    def refresh_current_screen(self):
-        if hasattr(self, "_current_screen") and callable(self._current_screen):
-            self._current_screen()
+    def load_empresa_context(self):
+        if self.usuario_tipo != "empresa" or not self.token:
+            return
+        r, data = self.request_json("GET", f"{self.api}/empresa/plano", params={"token": self.token})
+        if r.status_code == 200:
+            self.plano_nome = data.get("plano_nome", "—")
+            self.modulos_ativos = data.get("modulos_ativos", [])
+        else:
+            self.plano_nome = "—"
+            self.modulos_ativos = []
+
+    def has_modulo(self, modulo):
+        if self.usuario_tipo != "empresa":
+            return True
+        return modulo in self.modulos_ativos
+
+    def blocked_module(self, modulo):
+        box = CTkFrame(self.content)
+        box.pack(fill="both", expand=True, padx=20, pady=20)
+        CTkLabel(box, text="Módulo não ativo", font=("Arial", 24, "bold")).pack(pady=20)
+        CTkLabel(box, text=f"O módulo '{modulo}' não está ativo para esta empresa.").pack(pady=6)
 
     # =====================================================
     # LOGIN
@@ -112,7 +116,7 @@ class App(CTk):
         box.pack(expand=True, padx=20, pady=20)
 
         CTkLabel(box, text="RK Sistemas", font=("Arial", 30, "bold")).pack(pady=(25, 10))
-        CTkLabel(box, text="Login do sistema", font=("Arial", 16)).pack(pady=(0, 15))
+        CTkLabel(box, text="Acesso ao sistema", font=("Arial", 16)).pack(pady=(0, 15))
 
         tipo_frame = CTkFrame(box)
         tipo_frame.pack(fill="x", padx=20, pady=10)
@@ -143,66 +147,27 @@ class App(CTk):
             messagebox.showwarning("Aviso", "Preencha email e senha.")
             return
 
-        tipo = self.tipo_login.get()
         rota = {
-            "admin": "/admin/login",
             "empresa": "/empresa/login",
+            "admin": "/admin/login",
             "garcom": "/garcom/login",
-        }[tipo]
+        }[self.tipo_login.get()]
 
-        try:
-            r, data = self.request_json(
-                "POST",
-                f"{self.api}{rota}",
-                json={"email": email, "senha": senha}
-            )
-
-            if r.status_code != 200:
-                self.show_api_error("Erro de login", data, "Não foi possível entrar")
-                return
-
-            self.token = data["token"]
-            self.usuario_tipo = tipo
-
-            if tipo == "admin":
-                self.admin_empresas_screen()
-            elif tipo == "empresa":
-                self.load_empresa_context()
-                self.empresa_dashboard_screen()
-            else:
-                self.garcom_dashboard_screen()
-
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao conectar ao servidor.\n{e}")
-
-    # =====================================================
-    # CONTEXTO EMPRESA
-    # =====================================================
-
-    def load_empresa_context(self):
-        if self.usuario_tipo != "empresa" or not self.token:
+        r, data = self.request_json("POST", f"{self.api}{rota}", json={"email": email, "senha": senha})
+        if r.status_code != 200:
+            self.api_error("Erro de login", data, "Não foi possível entrar")
             return
 
-        try:
-            r, data = self.request_json(
-                "GET",
-                f"{self.api}/empresa/plano",
-                params={"token": self.token}
-            )
-            if r.status_code == 200:
-                self.plano_nome = data.get("plano_nome", "—")
-                self.modulos_ativos = data.get("modulos_ativos", [])
-            else:
-                self.plano_nome = "—"
-                self.modulos_ativos = []
-        except Exception:
-            self.plano_nome = "—"
-            self.modulos_ativos = []
+        self.token = data["token"]
+        self.usuario_tipo = self.tipo_login.get()
 
-    def has_modulo(self, modulo):
-        if self.usuario_tipo != "empresa":
-            return True
-        return modulo in self.modulos_ativos
+        if self.usuario_tipo == "admin":
+            self.admin_empresas_screen()
+        elif self.usuario_tipo == "empresa":
+            self.load_empresa_context()
+            self.dashboard_screen()
+        else:
+            self.garcom_dashboard_screen()
 
     # =====================================================
     # SIDEBARS
@@ -213,9 +178,7 @@ class App(CTk):
             w.destroy()
 
         CTkLabel(self.sidebar, text="Painel Admin", font=("Arial", 18, "bold")).pack(pady=15)
-
         CTkButton(self.sidebar, text="Empresas", command=self.admin_empresas_screen).pack(fill="x", padx=12, pady=5)
-        CTkButton(self.sidebar, text="Atualizar", command=self.admin_empresas_screen).pack(fill="x", padx=12, pady=5)
 
     def empresa_sidebar(self):
         for w in self.sidebar.winfo_children():
@@ -224,7 +187,7 @@ class App(CTk):
         CTkLabel(self.sidebar, text="Empresa", font=("Arial", 18, "bold")).pack(pady=15)
 
         botoes = [
-            ("Dashboard", self.empresa_dashboard_screen),
+            ("Dashboard", self.dashboard_screen),
             ("Categorias", self.categorias_screen),
             ("Produtos", self.produtos_screen),
             ("Clientes", self.clientes_screen),
@@ -237,9 +200,11 @@ class App(CTk):
             ("KDS Bar", self.kds_bar_screen),
             ("Entregadores", self.entregadores_screen),
             ("Chamados", self.chamados_screen),
+            ("WhatsApp", self.whatsapp_screen),
+            ("aiqfome", self.aiqfome_screen),
+            ("Comer Aqui", self.comer_aqui_screen),
             ("Configurações", self.config_screen),
         ]
-
         for texto, cmd in botoes:
             CTkButton(self.sidebar, text=texto, command=cmd).pack(fill="x", padx=12, pady=4)
 
@@ -248,7 +213,6 @@ class App(CTk):
             w.destroy()
 
         CTkLabel(self.sidebar, text="Módulo Garçom", font=("Arial", 18, "bold")).pack(pady=15)
-
         CTkButton(self.sidebar, text="Dashboard", command=self.garcom_dashboard_screen).pack(fill="x", padx=12, pady=4)
         CTkButton(self.sidebar, text="Mesas", command=self.garcom_mesas_screen).pack(fill="x", padx=12, pady=4)
         CTkButton(self.sidebar, text="Comandas", command=self.garcom_comandas_screen).pack(fill="x", padx=12, pady=4)
@@ -264,7 +228,7 @@ class App(CTk):
         self.build_shell("Admin - Empresas")
         self.admin_sidebar()
 
-        left = CTkFrame(self.content, width=380)
+        left = CTkFrame(self.content, width=390)
         left.pack(side="left", fill="y", padx=(10, 5), pady=10)
         left.pack_propagate(False)
 
@@ -284,101 +248,41 @@ class App(CTk):
 
         CTkButton(left, text="Criar Empresa", command=self.admin_criar_empresa).pack(pady=12)
 
-        CTkLabel(left, text="Troca rápida de plano / módulo", font=("Arial", 15, "bold")).pack(pady=(20, 8))
+        CTkLabel(left, text="Troca rápida de plano/status", font=("Arial", 15, "bold")).pack(pady=(20, 8))
 
-        self.admin_empresa_id_entry = CTkEntry(left, placeholder_text="ID da empresa", width=300)
-        self.admin_empresa_id_entry.pack(pady=5)
+        self.admin_empresa_id = CTkEntry(left, placeholder_text="ID da empresa", width=300)
+        self.admin_empresa_id.pack(pady=5)
 
-        self.admin_plano_id_entry = CTkEntry(left, placeholder_text="ID do plano", width=300)
-        self.admin_plano_id_entry.pack(pady=5)
+        self.admin_plano_id = CTkEntry(left, placeholder_text="ID do plano", width=300)
+        self.admin_plano_id.pack(pady=5)
 
         CTkButton(left, text="Trocar Plano", command=self.admin_trocar_plano).pack(pady=8)
 
-        self.admin_status_option = CTkOptionMenu(left, values=["ativo", "pausado", "bloqueado", "cancelado"])
-        self.admin_status_option.pack(pady=5)
+        self.admin_status = CTkOptionMenu(left, values=["ativo", "pausado", "bloqueado", "cancelado"])
+        self.admin_status.pack(pady=5)
 
         CTkButton(left, text="Alterar Status", command=self.admin_alterar_status).pack(pady=8)
 
-        self.admin_modulo_nome = CTkEntry(left, placeholder_text="Modulo ex: delivery", width=300)
-        self.admin_modulo_nome.pack(pady=5)
-
-        self.admin_modulo_ativo = CTkOptionMenu(left, values=["true", "false"])
-        self.admin_modulo_ativo.pack(pady=5)
-
-        CTkButton(left, text="Atualizar Módulo", command=self.admin_atualizar_modulo).pack(pady=8)
-
         CTkLabel(right, text="Empresas cadastradas", font=("Arial", 18, "bold")).pack(anchor="w", pady=(5, 10))
 
-        try:
-            r, empresas = self.request_json(
-                "GET",
-                f"{self.api}/admin/empresas",
-                params={"token": self.token}
-            )
-
-            if r.status_code != 200:
-                self.show_api_error("Erro", empresas, "Não foi possível carregar empresas")
-                return
-
-            if not empresas:
-                CTkLabel(right, text="Nenhuma empresa cadastrada.").pack(anchor="w", pady=10)
-                return
-
-            for emp in empresas:
-                card = CTkFrame(right)
-                card.pack(fill="x", padx=5, pady=6)
-
-                CTkLabel(
-                    card,
-                    text=f"{emp.get('nome', '')}  |  ID {emp.get('id', '')}",
-                    font=("Arial", 16, "bold")
-                ).pack(anchor="w", padx=10, pady=(10, 2))
-
-                CTkLabel(
-                    card,
-                    text=f"Email: {emp.get('email', '')}"
-                ).pack(anchor="w", padx=10)
-
-                CTkLabel(
-                    card,
-                    text=f"Plano: {emp.get('plano_nome', '-')} | Status: {emp.get('status', '-')} | Vencimento: {emp.get('vencimento', '-')}"
-                ).pack(anchor="w", padx=10, pady=(2, 10))
-
-                mod_btn = CTkButton(
-                    card,
-                    text="Ver módulos",
-                    command=lambda eid=emp["id"]: self.admin_show_modulos_popup(eid)
-                )
-                mod_btn.pack(anchor="e", padx=10, pady=(0, 10))
-
-        except Exception as e:
-            messagebox.showerror("Erro", str(e))
-
-    def admin_show_modulos_popup(self, empresa_id):
-        top = CTkToplevel(self)
-        top.title(f"Módulos da empresa {empresa_id}")
-        top.geometry("500x520")
-
-        box = CTkScrollableFrame(top)
-        box.pack(fill="both", expand=True, padx=10, pady=10)
-
-        r, data = self.request_json(
-            "GET",
-            f"{self.api}/admin/empresa/modulos",
-            params={"token": self.token, "empresa_id": empresa_id}
-        )
+        r, empresas = self.request_json("GET", f"{self.api}/admin/empresas", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar módulos")
+            self.api_error("Erro", empresas, "Falha ao carregar empresas")
             return
 
-        CTkLabel(box, text=f"Empresa {empresa_id}", font=("Arial", 18, "bold")).pack(pady=10)
+        for emp in empresas:
+            card = CTkFrame(right)
+            card.pack(fill="x", padx=5, pady=6)
 
-        for mod in data:
-            row = CTkFrame(box)
-            row.pack(fill="x", padx=5, pady=4)
+            CTkLabel(card, text=f"{emp['nome']} | ID {emp['id']}", font=("Arial", 16, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
+            CTkLabel(card, text=f"Email: {emp['email']}").pack(anchor="w", padx=10)
+            CTkLabel(card, text=f"Plano: {emp.get('plano_nome', '-')} | Status: {emp.get('status', '-')} | Vencimento: {emp.get('vencimento', '-')}").pack(anchor="w", padx=10, pady=(2, 10))
 
-            CTkLabel(row, text=mod["modulo"]).pack(side="left", padx=10, pady=10)
-            CTkLabel(row, text="ATIVO" if mod["ativo"] else "DESLIGADO").pack(side="right", padx=10)
+            CTkButton(
+                card,
+                text="Ver módulos",
+                command=lambda eid=emp["id"]: self.admin_modulos_popup(eid)
+            ).pack(anchor="e", padx=10, pady=(0, 10))
 
     def admin_criar_empresa(self):
         nome = self.admin_nome.get().strip()
@@ -395,9 +299,8 @@ class App(CTk):
             params={"token": self.token},
             json={"nome": nome, "email": email, "senha": senha}
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar empresa")
+            self.api_error("Erro", data, "Falha ao criar empresa")
             return
 
         messagebox.showinfo("Sucesso", data.get("msg", "Empresa criada"))
@@ -405,8 +308,8 @@ class App(CTk):
 
     def admin_trocar_plano(self):
         try:
-            empresa_id = int(self.admin_empresa_id_entry.get().strip())
-            plano_id = int(self.admin_plano_id_entry.get().strip())
+            empresa_id = int(self.admin_empresa_id.get().strip())
+            plano_id = int(self.admin_plano_id.get().strip())
         except Exception:
             messagebox.showwarning("Aviso", "Informe IDs válidos.")
             return
@@ -416,9 +319,8 @@ class App(CTk):
             f"{self.api}/admin/empresa/plano",
             params={"token": self.token, "empresa_id": empresa_id, "plano_id": plano_id}
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao trocar plano")
+            self.api_error("Erro", data, "Falha ao trocar plano")
             return
 
         messagebox.showinfo("Sucesso", data.get("msg", "Plano atualizado"))
@@ -426,63 +328,70 @@ class App(CTk):
 
     def admin_alterar_status(self):
         try:
-            empresa_id = int(self.admin_empresa_id_entry.get().strip())
+            empresa_id = int(self.admin_empresa_id.get().strip())
         except Exception:
             messagebox.showwarning("Aviso", "Informe o ID da empresa.")
             return
-
-        status = self.admin_status_option.get()
 
         r, data = self.request_json(
             "POST",
             f"{self.api}/admin/empresa/status",
-            params={"token": self.token, "empresa_id": empresa_id, "status": status}
+            params={"token": self.token, "empresa_id": empresa_id, "status": self.admin_status.get()}
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao alterar status")
+            self.api_error("Erro", data, "Falha ao alterar status")
             return
 
-        messagebox.showinfo("Sucesso", data.get("msg", "Status atualizado"))
+        messagebox.showinfo("Sucesso", data.get("msg", "Status alterado"))
         self.admin_empresas_screen()
 
-    def admin_atualizar_modulo(self):
-        try:
-            empresa_id = int(self.admin_empresa_id_entry.get().strip())
-        except Exception:
-            messagebox.showwarning("Aviso", "Informe o ID da empresa.")
-            return
+    def admin_modulos_popup(self, empresa_id):
+        top = CTkToplevel(self)
+        top.title(f"Módulos da empresa {empresa_id}")
+        top.geometry("520x620")
 
-        modulo = self.admin_modulo_nome.get().strip()
-        ativo = self.admin_modulo_ativo.get() == "true"
+        frame = CTkScrollableFrame(top)
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        if not modulo:
-            messagebox.showwarning("Aviso", "Informe o nome do módulo.")
-            return
+        CTkLabel(frame, text=f"Módulos - Empresa {empresa_id}", font=("Arial", 20, "bold")).pack(pady=10)
 
-        r, data = self.request_json(
-            "POST",
-            f"{self.api}/admin/empresa/modulo",
-            json={
-                "token": self.token,
-                "empresa_id": empresa_id,
-                "modulo": modulo,
-                "ativo": ativo
-            }
+        r, modulos = self.request_json(
+            "GET",
+            f"{self.api}/admin/empresa/modulos",
+            params={"token": self.token, "empresa_id": empresa_id}
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao atualizar módulo")
+            self.api_error("Erro", modulos, "Falha ao carregar módulos")
             return
 
-        messagebox.showinfo("Sucesso", data.get("msg", "Módulo atualizado"))
+        checks = {}
+        for mod in modulos:
+            var = BooleanVar(value=bool(mod["ativo"]))
+            ck = CTkCheckBox(frame, text=mod["modulo"], variable=var, onvalue=True, offvalue=False)
+            ck.pack(anchor="w", padx=12, pady=5)
+            checks[mod["modulo"]] = var
+
+        def salvar():
+            payload = {nome: bool(var.get()) for nome, var in checks.items()}
+            r2, data2 = self.request_json(
+                "POST",
+                f"{self.api}/admin/empresa/modulos/salvar",
+                json={"token": self.token, "empresa_id": empresa_id, "modulos": payload}
+            )
+            if r2.status_code != 200:
+                self.api_error("Erro", data2, "Falha ao salvar módulos")
+                return
+            messagebox.showinfo("Sucesso", data2.get("msg", "Módulos atualizados"))
+            top.destroy()
+
+        CTkButton(frame, text="Salvar módulos", command=salvar).pack(pady=15)
 
     # =====================================================
-    # EMPRESA DASHBOARD
+    # DASHBOARD
     # =====================================================
 
-    def empresa_dashboard_screen(self):
-        self._current_screen = self.empresa_dashboard_screen
+    def dashboard_screen(self):
+        self._current_screen = self.dashboard_screen
         self.load_empresa_context()
         self.build_shell("Empresa - Dashboard")
         self.empresa_sidebar()
@@ -491,38 +400,47 @@ class App(CTk):
         box.pack(fill="both", expand=True, padx=10, pady=10)
 
         CTkLabel(box, text="Resumo da empresa", font=("Arial", 22, "bold")).pack(anchor="w", pady=(5, 10))
-        CTkLabel(box, text=f"Plano atual: {self.plano_nome}").pack(anchor="w", pady=3)
+        CTkLabel(box, text=f"Plano: {self.plano_nome}").pack(anchor="w", pady=3)
+        CTkLabel(box, text=f"Módulos ativos: {', '.join(self.modulos_ativos) if self.modulos_ativos else 'Nenhum'}", wraplength=1000, justify="left").pack(anchor="w", pady=3)
 
-        mods = ", ".join(self.modulos_ativos) if self.modulos_ativos else "Nenhum módulo ativo"
-        CTkLabel(box, text=f"Módulos ativos: {mods}", wraplength=1000, justify="left").pack(anchor="w", pady=3)
-
-        cards = CTkFrame(box)
-        cards.pack(fill="x", pady=15)
-
-        endpoints = [
-            ("Categorias", "/categorias"),
-            ("Produtos", "/produtos?token=dummy&tipo=produto"),
-            ("Mesas", "/mesas"),
-            ("Comandas", "/comandas"),
-            ("Pedidos", "/pedidos"),
-            ("Chamados", "/chamados"),
-        ]
-
-        for titulo, _ in endpoints:
-            card = CTkFrame(cards, width=210, height=100)
-            card.pack(side="left", padx=8, pady=8)
-            card.pack_propagate(False)
-            CTkLabel(card, text=titulo, font=("Arial", 16, "bold")).pack(expand=True)
-
-        info = CTkTextbox(box, height=260)
-        info.pack(fill="x", pady=10)
-        info.insert("end", "Esse painel já está ligado ao backend novo.\n\n")
-        info.insert("end", "- Categorias definem se o item vai para cozinha ou bar.\n")
-        info.insert("end", "- Comandas aceitam múltiplas por mesa.\n")
-        info.insert("end", "- KDS cozinha e KDS bar ficam separados.\n")
-        info.insert("end", "- Delivery usa nome do entregador e código de bip.\n")
-        info.insert("end", "- Cardápio QR pode pedir, chamar garçom e pedir conta.\n")
+        info = CTkTextbox(box, height=240)
+        info.pack(fill="x", pady=15)
+        info.insert("end", "Sistema unificado ativo.\n\n")
+        info.insert("end", "- Categorias definem cozinha ou bar.\n")
+        info.insert("end", "- Múltiplas comandas por mesa.\n")
+        info.insert("end", "- KDS separado para cozinha e bar.\n")
+        info.insert("end", "- Delivery com entregador e bip.\n")
+        info.insert("end", "- WhatsApp, aiqfome e Comer Aqui em telas separadas.\n")
         info.configure(state="disabled")
+
+    # =====================================================
+    # TELAS SIMPLES
+    # =====================================================
+
+    def simple_list_screen(self, title, endpoint, modulo=None):
+        self.build_shell(title)
+        self.empresa_sidebar()
+
+        if modulo and not self.has_modulo(modulo):
+            self.blocked_module(modulo)
+            return
+
+        box = CTkScrollableFrame(self.content)
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+
+        r, data = self.request_json("GET", f"{self.api}{endpoint}", params={"token": self.token})
+        if r.status_code != 200:
+            self.api_error("Erro", data, "Falha ao carregar")
+            return
+
+        if not data:
+            CTkLabel(box, text="Sem dados.").pack(anchor="w", pady=10)
+            return
+
+        for item in data:
+            card = CTkFrame(box)
+            card.pack(fill="x", padx=5, pady=5)
+            CTkLabel(card, text=str(item), justify="left", wraplength=1000).pack(anchor="w", padx=10, pady=10)
 
     # =====================================================
     # CATEGORIAS
@@ -550,22 +468,18 @@ class App(CTk):
 
         CTkButton(left, text="Salvar Categoria", command=self.criar_categoria).pack(pady=12)
 
-        CTkLabel(right, text="Lista de categorias", font=("Arial", 18, "bold")).pack(anchor="w", pady=(5, 10))
-
         r, data = self.request_json("GET", f"{self.api}/categorias", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar categorias")
+            self.api_error("Erro", data, "Falha ao carregar categorias")
             return
 
         for item in data:
             card = CTkFrame(right)
             card.pack(fill="x", padx=5, pady=5)
-            CTkLabel(card, text=f"{item['nome']}  |  Setor: {item['setor']}", font=("Arial", 15, "bold")).pack(anchor="w", padx=10, pady=10)
+            CTkLabel(card, text=f"{item['nome']} | Setor: {item['setor']}", font=("Arial", 15, "bold")).pack(anchor="w", padx=10, pady=10)
 
     def criar_categoria(self):
         nome = self.cat_nome.get().strip()
-        setor = self.cat_setor.get()
-
         if not nome:
             messagebox.showwarning("Aviso", "Informe o nome.")
             return
@@ -573,11 +487,10 @@ class App(CTk):
         r, data = self.request_json(
             "POST",
             f"{self.api}/categorias",
-            json={"token": self.token, "nome": nome, "setor": setor}
+            json={"token": self.token, "nome": nome, "setor": self.cat_setor.get()}
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar categoria")
+            self.api_error("Erro", data, "Falha ao criar categoria")
             return
 
         messagebox.showinfo("Sucesso", data.get("msg", "Categoria criada"))
@@ -615,7 +528,7 @@ class App(CTk):
 
         rcat, cats = self.request_json("GET", f"{self.api}/categorias", params={"token": self.token})
         if rcat.status_code != 200:
-            self.show_api_error("Erro", cats, "Falha ao carregar categorias")
+            self.api_error("Erro", cats, "Falha ao carregar categorias")
             return
 
         self.categorias_map = {f"{c['id']} - {c['nome']} ({c['setor']})": c["id"] for c in cats}
@@ -625,15 +538,9 @@ class App(CTk):
 
         CTkButton(left, text="Salvar Produto", command=self.criar_produto).pack(pady=12)
 
-        CTkLabel(right, text="Lista de produtos", font=("Arial", 18, "bold")).pack(anchor="w", pady=(5, 10))
-
-        r, data = self.request_json(
-            "GET",
-            f"{self.api}/produtos",
-            params={"token": self.token, "tipo": "produto"}
-        )
+        r, data = self.request_json("GET", f"{self.api}/produtos", params={"token": self.token, "tipo": "produto"})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar produtos")
+            self.api_error("Erro", data, "Falha ao carregar produtos")
             return
 
         for p in data:
@@ -653,72 +560,51 @@ class App(CTk):
             return
 
         try:
-            nome = self.prod_nome.get().strip()
             preco = float(self.prod_preco.get().replace(",", "."))
             estoque = int(self.prod_estoque.get() or "0")
         except Exception:
             messagebox.showwarning("Aviso", "Preço ou estoque inválido.")
             return
 
-        categoria_id = self.categorias_map[self.prod_categoria.get()]
-        tipo = self.prod_tipo.get()
-
         r, data = self.request_json(
             "POST",
             f"{self.api}/produto",
             json={
                 "token": self.token,
-                "categoria_id": categoria_id,
-                "nome": nome,
+                "categoria_id": self.categorias_map[self.prod_categoria.get()],
+                "nome": self.prod_nome.get().strip(),
                 "preco": preco,
                 "estoque": estoque,
-                "tipo": tipo
+                "tipo": self.prod_tipo.get()
             }
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar produto")
+            self.api_error("Erro", data, "Falha ao criar produto")
             return
 
         messagebox.showinfo("Sucesso", data.get("msg", "Produto criado"))
         self.produtos_screen()
 
     # =====================================================
-    # CLIENTES / FORNECEDORES / FUNCIONÁRIOS
+    # CADASTROS
     # =====================================================
 
     def clientes_screen(self):
         self._current_screen = self.clientes_screen
-        self.build_shell("Clientes")
-        self.empresa_sidebar()
-
-        if not self.has_modulo("cadastro_clientes"):
-            self.modulo_block_screen("cadastro_clientes")
-            return
-
         self.simple_cadastro_screen(
-            title="Clientes",
-            fields=["Nome", "Telefone", "Email", "Documento", "Observações"],
-            endpoint_create="/clientes",
-            endpoint_list="/clientes",
-            key_map=["nome", "telefone", "email", "documento", "observacoes"]
+            "Clientes",
+            "cadastro_clientes",
+            [("Nome", "nome"), ("Telefone", "telefone"), ("Email", "email"), ("Documento", "documento"), ("Observações", "observacoes")],
+            "/clientes"
         )
 
     def fornecedores_screen(self):
         self._current_screen = self.fornecedores_screen
-        self.build_shell("Fornecedores")
-        self.empresa_sidebar()
-
-        if not self.has_modulo("cadastro_fornecedores"):
-            self.modulo_block_screen("cadastro_fornecedores")
-            return
-
         self.simple_cadastro_screen(
-            title="Fornecedores",
-            fields=["Nome", "Telefone", "Email", "Documento", "Observações"],
-            endpoint_create="/fornecedores",
-            endpoint_list="/fornecedores",
-            key_map=["nome", "telefone", "email", "documento", "observacoes"]
+            "Fornecedores",
+            "cadastro_fornecedores",
+            [("Nome", "nome"), ("Telefone", "telefone"), ("Email", "email"), ("Documento", "documento"), ("Observações", "observacoes")],
+            "/fornecedores"
         )
 
     def funcionarios_screen(self):
@@ -727,7 +613,7 @@ class App(CTk):
         self.empresa_sidebar()
 
         if not self.has_modulo("cadastro_funcionarios"):
-            self.modulo_block_screen("cadastro_funcionarios")
+            self.blocked_module("cadastro_funcionarios")
             return
 
         left = CTkFrame(self.content, width=420)
@@ -737,20 +623,14 @@ class App(CTk):
         right = CTkScrollableFrame(self.content)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
 
-        CTkLabel(left, text="Novo funcionário", font=("Arial", 18, "bold")).pack(pady=15)
-
         self.fun_nome = CTkEntry(left, placeholder_text="Nome", width=320)
         self.fun_nome.pack(pady=6)
-
         self.fun_tel = CTkEntry(left, placeholder_text="Telefone", width=320)
         self.fun_tel.pack(pady=6)
-
         self.fun_email = CTkEntry(left, placeholder_text="Email", width=320)
         self.fun_email.pack(pady=6)
-
         self.fun_senha = CTkEntry(left, placeholder_text="Senha", width=320)
         self.fun_senha.pack(pady=6)
-
         self.fun_cargo = CTkOptionMenu(left, values=["garcom", "admin_empresa", "caixa", "cozinha", "bar"])
         self.fun_cargo.pack(pady=6)
 
@@ -758,16 +638,13 @@ class App(CTk):
 
         r, data = self.request_json("GET", f"{self.api}/funcionarios", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar funcionários")
+            self.api_error("Erro", data, "Falha ao carregar funcionários")
             return
 
         for f in data:
             card = CTkFrame(right)
             card.pack(fill="x", padx=5, pady=5)
-            CTkLabel(
-                card,
-                text=f"{f['nome']} | {f['cargo']} | {f['email']} | {'ativo' if f['ativo'] else 'inativo'}"
-            ).pack(anchor="w", padx=10, pady=10)
+            CTkLabel(card, text=f"{f['nome']} | {f['cargo']} | {f['email']}").pack(anchor="w", padx=10, pady=10)
 
     def criar_funcionario(self):
         r, data = self.request_json(
@@ -782,15 +659,20 @@ class App(CTk):
                 "cargo": self.fun_cargo.get(),
             }
         )
-
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar funcionário")
+            self.api_error("Erro", data, "Falha ao criar funcionário")
             return
-
         messagebox.showinfo("Sucesso", data.get("msg", "Funcionário criado"))
         self.funcionarios_screen()
 
-    def simple_cadastro_screen(self, title, fields, endpoint_create, endpoint_list, key_map):
+    def simple_cadastro_screen(self, title, modulo, fields, endpoint):
+        self.build_shell(title)
+        self.empresa_sidebar()
+
+        if not self.has_modulo(modulo):
+            self.blocked_module(modulo)
+            return
+
         left = CTkFrame(self.content, width=420)
         left.pack(side="left", fill="y", padx=(10, 5), pady=10)
         left.pack_propagate(False)
@@ -798,39 +680,35 @@ class App(CTk):
         right = CTkScrollableFrame(self.content)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
 
-        CTkLabel(left, text=f"Novo {title[:-1]}", font=("Arial", 18, "bold")).pack(pady=15)
-
-        entries = []
-        for fld in fields:
-            e = CTkEntry(left, placeholder_text=fld, width=320)
+        entries = {}
+        for label, key in fields:
+            e = CTkEntry(left, placeholder_text=label, width=320)
             e.pack(pady=6)
-            entries.append(e)
+            entries[key] = e
 
         def salvar():
             payload = {"token": self.token}
-            for entry, key in zip(entries, key_map):
-                payload[key] = entry.get().strip()
+            for _, key in fields:
+                payload[key] = entries[key].get().strip()
 
-            r, data = self.request_json("POST", f"{self.api}{endpoint_create}", json=payload)
+            r, data = self.request_json("POST", f"{self.api}{endpoint}", json=payload)
             if r.status_code != 200:
-                self.show_api_error("Erro", data, "Falha ao salvar")
+                self.api_error("Erro", data, "Falha ao salvar")
                 return
-
             messagebox.showinfo("Sucesso", data.get("msg", "Salvo"))
-            self.refresh_current_screen()
+            self.refresh_screen()
 
         CTkButton(left, text="Salvar", command=salvar).pack(pady=12)
 
-        r, data = self.request_json("GET", f"{self.api}{endpoint_list}", params={"token": self.token})
+        r, data = self.request_json("GET", f"{self.api}{endpoint}", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao listar")
+            self.api_error("Erro", data, "Falha ao listar")
             return
 
         for item in data:
             card = CTkFrame(right)
             card.pack(fill="x", padx=5, pady=5)
-            texto = " | ".join([str(item.get(k, "")) for k in key_map[:4]])
-            CTkLabel(card, text=texto).pack(anchor="w", padx=10, pady=10)
+            CTkLabel(card, text=str(item), justify="left", wraplength=1000).pack(anchor="w", padx=10, pady=10)
 
     # =====================================================
     # MESAS
@@ -855,11 +733,13 @@ class App(CTk):
 
         CTkButton(left, text="Criar Mesa", command=self.criar_mesa).pack(pady=12)
 
-        CTkLabel(right, text="Mesas cadastradas", font=("Arial", 18, "bold")).pack(anchor="w", pady=(5, 10))
-
         r, data = self.request_json("GET", f"{self.api}/mesas", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar mesas")
+            self.api_error("Erro", data, "Falha ao carregar mesas")
+            return
+
+        if not data:
+            CTkLabel(right, text="Nenhuma mesa cadastrada.").pack(anchor="w", pady=10)
             return
 
         grid = CTkFrame(right, fg_color="transparent")
@@ -894,7 +774,7 @@ class App(CTk):
             json={"token": self.token, "numero": numero}
         )
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar mesa")
+            self.api_error("Erro", data, "Falha ao criar mesa")
             return
 
         messagebox.showinfo("Sucesso", f"{data.get('msg', 'Mesa criada')}\nQR: {data.get('qr_code', '')}")
@@ -909,14 +789,12 @@ class App(CTk):
         self.build_shell("Comandas")
         self.empresa_sidebar()
 
-        left = CTkFrame(self.content, width=420)
+        left = CTkFrame(self.content, width=430)
         left.pack(side="left", fill="y", padx=(10, 5), pady=10)
         left.pack_propagate(False)
 
         right = CTkScrollableFrame(self.content)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
-
-        CTkLabel(left, text="Nova comanda", font=("Arial", 18, "bold")).pack(pady=15)
 
         r_mesas, mesas = self.request_json("GET", f"{self.api}/mesas", params={"token": self.token})
         self.mesas_map = {f"{m['id']} - Mesa {m['numero']}": m["id"] for m in mesas} if r_mesas.status_code == 200 else {}
@@ -925,9 +803,7 @@ class App(CTk):
         self.comanda_mesa.pack(pady=6)
 
         r_cli, clientes = self.request_json("GET", f"{self.api}/clientes", params={"token": self.token})
-        self.clientes_map = {}
-        if r_cli.status_code == 200 and isinstance(clientes, list):
-            self.clientes_map = {f"{c['id']} - {c['nome']}": c["id"] for c in clientes}
+        self.clientes_map = {f"{c['id']} - {c['nome']}": c["id"] for c in clientes} if r_cli.status_code == 200 and isinstance(clientes, list) else {}
         cliente_values = ["Sem cliente"] + list(self.clientes_map.keys())
         self.comanda_cliente = CTkOptionMenu(left, values=cliente_values)
         self.comanda_cliente.pack(pady=6)
@@ -939,14 +815,11 @@ class App(CTk):
         self.comanda_obs.pack(pady=6)
 
         CTkButton(left, text="Criar Comanda", command=self.criar_comanda).pack(pady=12)
-
         CTkButton(left, text="Abrir Tela de Pedido", command=self.open_pedido_popup).pack(pady=6)
-
-        CTkLabel(right, text="Comandas", font=("Arial", 18, "bold")).pack(anchor="w", pady=(5, 10))
 
         r, data = self.request_json("GET", f"{self.api}/comandas", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar comandas")
+            self.api_error("Erro", data, "Falha ao carregar comandas")
             return
 
         for c in data:
@@ -979,7 +852,7 @@ class App(CTk):
             }
         )
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar comanda")
+            self.api_error("Erro", data, "Falha ao criar comanda")
             return
 
         messagebox.showinfo("Sucesso", f"Comanda criada\nNúmero: {data.get('numero')}")
@@ -988,21 +861,22 @@ class App(CTk):
     def open_pedido_popup(self):
         top = CTkToplevel(self)
         top.title("Novo Pedido")
-        top.geometry("780x720")
+        top.geometry("800x720")
 
         frame = CTkScrollableFrame(top)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        CTkLabel(frame, text="Criar pedido", font=("Arial", 20, "bold")).pack(pady=10)
-
         r_com, comandas = self.request_json("GET", f"{self.api}/comandas", params={"token": self.token, "status": "aberta"})
         if r_com.status_code != 200:
-            self.show_api_error("Erro", comandas, "Falha ao carregar comandas")
+            self.api_error("Erro", comandas, "Falha ao carregar comandas")
+            return
+
+        if not comandas:
+            CTkLabel(frame, text="Nenhuma comanda aberta.").pack(pady=20)
             return
 
         com_map = {f"{c['id']} - Comanda {c['numero']}": c["id"] for c in comandas}
-        com_values = list(com_map.keys()) if com_map else ["Sem comandas"]
-        comanda_opt = CTkOptionMenu(frame, values=com_values)
+        comanda_opt = CTkOptionMenu(frame, values=list(com_map.keys()))
         comanda_opt.pack(pady=8)
 
         origem_opt = CTkOptionMenu(frame, values=["balcao", "qr", "app_entrega", "garcom"])
@@ -1013,7 +887,7 @@ class App(CTk):
 
         r_prod, produtos = self.request_json("GET", f"{self.api}/produtos", params={"token": self.token, "tipo": "produto"})
         if r_prod.status_code != 200:
-            self.show_api_error("Erro", produtos, "Falha ao carregar produtos")
+            self.api_error("Erro", produtos, "Falha ao carregar produtos")
             return
 
         r_add, adicionais = self.request_json("GET", f"{self.api}/adicionais", params={"token": self.token})
@@ -1036,13 +910,11 @@ class App(CTk):
             obs = CTkEntry(row, placeholder_text="Observação", width=180)
             obs.pack(side="left", padx=5)
 
-            add_ids = []
+            add_opt = None
             if adicionais_map:
                 add_values = [f"{a['id']} - {a['nome']}" for a in adicionais]
                 add_opt = CTkOptionMenu(row, values=["Sem adicional"] + add_values, width=180)
                 add_opt.pack(side="left", padx=5)
-            else:
-                add_opt = None
 
             items_holder.append((prod_map, prod_opt, qtd, obs, add_opt))
 
@@ -1050,10 +922,6 @@ class App(CTk):
         add_item_row()
 
         def salvar():
-            if not comandas:
-                messagebox.showwarning("Aviso", "Nenhuma comanda aberta.")
-                return
-
             itens = []
             for prod_map, prod_opt, qtd, obs, add_opt in items_holder:
                 try:
@@ -1083,9 +951,8 @@ class App(CTk):
                     "observacoes": obs_entry.get().strip()
                 }
             )
-
             if r.status_code != 200:
-                self.show_api_error("Erro", data, "Falha ao criar pedido")
+                self.api_error("Erro", data, "Falha ao criar pedido")
                 return
 
             messagebox.showinfo("Sucesso", data.get("msg", "Pedido criado"))
@@ -1094,43 +961,54 @@ class App(CTk):
         CTkButton(frame, text="Salvar pedido", command=salvar).pack(pady=15)
 
     # =====================================================
-    # PEDIDOS
+    # PEDIDOS / KDS
     # =====================================================
 
     def pedidos_screen(self):
         self._current_screen = self.pedidos_screen
-        self.build_shell("Pedidos")
+        self.render_pedidos_screen("Pedidos", "/pedidos", None)
+
+    def kds_cozinha_screen(self):
+        self._current_screen = self.kds_cozinha_screen
+        if not self.has_modulo("kds_cozinha"):
+            self.build_shell("KDS - Cozinha")
+            self.empresa_sidebar()
+            self.blocked_module("kds_cozinha")
+            return
+        self.render_pedidos_screen("KDS - Cozinha", "/kds/cozinha", "cozinha")
+
+    def kds_bar_screen(self):
+        self._current_screen = self.kds_bar_screen
+        if not self.has_modulo("kds_bar"):
+            self.build_shell("KDS - Bar")
+            self.empresa_sidebar()
+            self.blocked_module("kds_bar")
+            return
+        self.render_pedidos_screen("KDS - Bar", "/kds/bar", "bar")
+
+    def render_pedidos_screen(self, title, endpoint, setor_fixo):
+        self.build_shell(title)
         self.empresa_sidebar()
 
         box = CTkScrollableFrame(self.content)
         box.pack(fill="both", expand=True, padx=10, pady=10)
 
-        top = CTkFrame(box)
-        top.pack(fill="x", pady=(0, 10))
-
-        self.pedido_status_filter = CTkOptionMenu(top, values=["todos", "recebido", "em_preparo", "pronto", "entregue", "cancelado"])
-        self.pedido_status_filter.pack(side="left", padx=5)
-
-        self.pedido_setor_filter = CTkOptionMenu(top, values=["todos", "cozinha", "bar"])
-        self.pedido_setor_filter.pack(side="left", padx=5)
-
-        CTkButton(top, text="Filtrar", command=self.pedidos_screen).pack(side="left", padx=5)
-
         params = {"token": self.token}
-        st = self.pedido_status_filter.get()
-        se = self.pedido_setor_filter.get()
-        if st != "todos":
-            params["status"] = st
-        if se != "todos":
-            params["setor"] = se
-
-        r, data = self.request_json("GET", f"{self.api}/pedidos", params=params)
+        r, data = self.request_json("GET", f"{self.api}{endpoint}", params=params)
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar pedidos")
+            self.api_error("Erro", data, "Falha ao carregar pedidos")
             return
 
         for ped in data:
-            card = CTkFrame(box)
+            cor = None
+            if ped.get("semaforo") == "atrasado":
+                cor = "#8B0000"
+            elif ped.get("semaforo") == "atencao":
+                cor = "#8B6508"
+            elif ped.get("status") == "pronto":
+                cor = "#2E8B57"
+
+            card = CTkFrame(box, fg_color=cor)
             card.pack(fill="x", padx=5, pady=6)
 
             info = (
@@ -1138,7 +1016,6 @@ class App(CTk):
                 f"Comanda: {ped.get('comanda_numero', '-')} | Mesa: {ped.get('mesa_numero', '-')} | Cliente: {ped.get('cliente_nome', '-')}\n"
                 f"Origem: {ped.get('origem', '-')} | Minutos aberto: {ped.get('minutos_aberto', 0)}"
             )
-
             CTkLabel(card, text=info, justify="left").pack(anchor="w", padx=10, pady=(10, 5))
 
             btns = CTkFrame(card, fg_color="transparent")
@@ -1158,34 +1035,19 @@ class App(CTk):
         box = CTkScrollableFrame(top)
         box.pack(fill="both", expand=True, padx=10, pady=10)
 
-        r, data = self.request_json(
-            "GET",
-            f"{self.api}/pedidos/{pedido_id}/itens",
-            params={"token": self.token}
-        )
+        r, data = self.request_json("GET", f"{self.api}/pedidos/{pedido_id}/itens", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar itens")
+            self.api_error("Erro", data, "Falha ao carregar itens")
             return
 
         for item in data:
             card = CTkFrame(box)
             card.pack(fill="x", padx=5, pady=5)
-
-            CTkLabel(
-                card,
-                text=f"{item['nome_produto']} | Qtd: {item['quantidade']} | R$ {float(item['preco']):.2f}",
-                font=("Arial", 15, "bold")
-            ).pack(anchor="w", padx=10, pady=(10, 3))
-
+            CTkLabel(card, text=f"{item['nome_produto']} | Qtd: {item['quantidade']} | R$ {float(item['preco']):.2f}", font=("Arial", 15, "bold")).pack(anchor="w", padx=10, pady=(10, 3))
             if item.get("observacoes"):
                 CTkLabel(card, text=f"Obs: {item['observacoes']}").pack(anchor="w", padx=10, pady=(0, 3))
-
             adds = item.get("adicionais", [])
-            if adds:
-                texto = "Adicionais: " + ", ".join([a["nome_adicional"] for a in adds])
-                CTkLabel(card, text=texto).pack(anchor="w", padx=10, pady=(0, 10))
-            else:
-                CTkLabel(card, text="Sem adicionais").pack(anchor="w", padx=10, pady=(0, 10))
+            CTkLabel(card, text="Adicionais: " + (", ".join([a["nome_adicional"] for a in adds]) if adds else "Nenhum")).pack(anchor="w", padx=10, pady=(0, 10))
 
     def update_pedido_status(self, pedido_id, status):
         r, data = self.request_json(
@@ -1194,11 +1056,10 @@ class App(CTk):
             json={"token": self.token, "status": status}
         )
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao atualizar status")
+            self.api_error("Erro", data, "Falha ao atualizar status")
             return
-
         messagebox.showinfo("Sucesso", data.get("msg", "Status atualizado"))
-        self.pedidos_screen()
+        self.refresh_screen()
 
     def sair_entrega_popup(self, pedido_id):
         top = CTkToplevel(self)
@@ -1209,7 +1070,6 @@ class App(CTk):
         frame.pack(fill="both", expand=True, padx=15, pady=15)
 
         CTkLabel(frame, text=f"Pedido {pedido_id}", font=("Arial", 18, "bold")).pack(pady=10)
-
         nome = CTkEntry(frame, placeholder_text="Nome do entregador", width=280)
         nome.pack(pady=8)
 
@@ -1220,79 +1080,16 @@ class App(CTk):
                 json={"token": self.token, "nome_entregador": nome.get().strip()}
             )
             if r.status_code != 200:
-                self.show_api_error("Erro", data, "Falha ao enviar para entrega")
+                self.api_error("Erro", data, "Falha ao enviar para entrega")
                 return
-
             messagebox.showinfo("Sucesso", f"{data.get('msg')}\nCódigo: {data.get('codigo_bip', '')}")
             top.destroy()
-            self.pedidos_screen()
+            self.refresh_screen()
 
         CTkButton(frame, text="Confirmar", command=enviar).pack(pady=12)
 
     # =====================================================
-    # KDS
-    # =====================================================
-
-    def kds_cozinha_screen(self):
-        self._current_screen = self.kds_cozinha_screen
-        self.build_shell("KDS - Cozinha")
-        self.empresa_sidebar()
-
-        if not self.has_modulo("kds_cozinha"):
-            self.modulo_block_screen("kds_cozinha")
-            return
-
-        self.render_kds("/kds/cozinha", "cozinha")
-
-    def kds_bar_screen(self):
-        self._current_screen = self.kds_bar_screen
-        self.build_shell("KDS - Bar")
-        self.empresa_sidebar()
-
-        if not self.has_modulo("kds_bar"):
-            self.modulo_block_screen("kds_bar")
-            return
-
-        self.render_kds("/kds/bar", "bar")
-
-    def render_kds(self, endpoint, setor):
-        box = CTkScrollableFrame(self.content)
-        box.pack(fill="both", expand=True, padx=10, pady=10)
-
-        CTkLabel(box, text=f"Fila {setor.upper()}", font=("Arial", 22, "bold")).pack(anchor="w", pady=(5, 10))
-
-        r, data = self.request_json("GET", f"{self.api}{endpoint}", params={"token": self.token})
-        if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar KDS")
-            return
-
-        for ped in data:
-            cor = "#1f6aa5"
-            if ped.get("semaforo") == "atrasado":
-                cor = "#8B0000"
-            elif ped.get("semaforo") == "atencao":
-                cor = "#8B6508"
-            elif ped.get("status") == "pronto":
-                cor = "#2E8B57"
-
-            card = CTkFrame(box, fg_color=cor)
-            card.pack(fill="x", padx=5, pady=6)
-
-            txt = (
-                f"Pedido {ped['id']} | Mesa {ped.get('mesa_numero', '-')} | Comanda {ped.get('comanda_numero', '-')}\n"
-                f"Status: {ped['status']} | Semáforo: {ped.get('semaforo', '-')} | {ped.get('minutos_aberto', 0)} min"
-            )
-            CTkLabel(card, text=txt, justify="left").pack(anchor="w", padx=10, pady=(10, 5))
-
-            btns = CTkFrame(card, fg_color="transparent")
-            btns.pack(fill="x", padx=10, pady=(0, 10))
-            CTkButton(btns, text="Itens", width=80, command=lambda pid=ped["id"]: self.show_pedido_itens(pid)).pack(side="left", padx=4)
-            CTkButton(btns, text="Em preparo", width=110, command=lambda pid=ped["id"]: self.update_pedido_status(pid, "em_preparo")).pack(side="left", padx=4)
-            CTkButton(btns, text="Pronto", width=90, command=lambda pid=ped["id"]: self.update_pedido_status(pid, "pronto")).pack(side="left", padx=4)
-            CTkButton(btns, text="Entregue", width=90, command=lambda pid=ped["id"]: self.update_pedido_status(pid, "entregue")).pack(side="left", padx=4)
-
-    # =====================================================
-    # ENTREGADORES
+    # ENTREGADORES / CHAMADOS
     # =====================================================
 
     def entregadores_screen(self):
@@ -1301,7 +1098,7 @@ class App(CTk):
         self.empresa_sidebar()
 
         if not self.has_modulo("delivery"):
-            self.modulo_block_screen("delivery")
+            self.blocked_module("delivery")
             return
 
         left = CTkFrame(self.content, width=380)
@@ -1311,17 +1108,15 @@ class App(CTk):
         right = CTkScrollableFrame(self.content)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
 
-        CTkLabel(left, text="Novo entregador", font=("Arial", 18, "bold")).pack(pady=15)
         self.ent_nome = CTkEntry(left, placeholder_text="Nome", width=300)
         self.ent_nome.pack(pady=6)
         self.ent_tel = CTkEntry(left, placeholder_text="Telefone", width=300)
         self.ent_tel.pack(pady=6)
-
         CTkButton(left, text="Salvar Entregador", command=self.criar_entregador).pack(pady=12)
 
         r, data = self.request_json("GET", f"{self.api}/entregadores", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar entregadores")
+            self.api_error("Erro", data, "Falha ao carregar entregadores")
             return
 
         for e in data:
@@ -1333,26 +1128,17 @@ class App(CTk):
         r, data = self.request_json(
             "POST",
             f"{self.api}/entregadores",
-            json={
-                "token": self.token,
-                "nome": self.ent_nome.get().strip(),
-                "telefone": self.ent_tel.get().strip()
-            }
+            json={"token": self.token, "nome": self.ent_nome.get().strip(), "telefone": self.ent_tel.get().strip()}
         )
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao criar entregador")
+            self.api_error("Erro", data, "Falha ao criar entregador")
             return
-
         messagebox.showinfo("Sucesso", data.get("msg", "Entregador criado"))
         self.entregadores_screen()
 
-    # =====================================================
-    # CHAMADOS
-    # =====================================================
-
     def chamados_screen(self):
         self._current_screen = self.chamados_screen
-        self.build_shell("Chamados das Mesas")
+        self.build_shell("Chamados")
         self.empresa_sidebar()
 
         box = CTkScrollableFrame(self.content)
@@ -1360,23 +1146,141 @@ class App(CTk):
 
         r, data = self.request_json("GET", f"{self.api}/chamados", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar chamados")
+            self.api_error("Erro", data, "Falha ao carregar chamados")
             return
 
         if not data:
-            CTkLabel(box, text="Nenhum chamado aberto.").pack(anchor="w", pady=10)
+            CTkLabel(box, text="Nenhum chamado.").pack(anchor="w", pady=10)
             return
 
         for ch in data:
             card = CTkFrame(box)
             card.pack(fill="x", padx=5, pady=5)
-            CTkLabel(
-                card,
-                text=f"Mesa {ch.get('mesa_numero', '-')} | Tipo: {ch.get('tipo', '-')} | Status: {ch.get('status', '-')}"
-            ).pack(anchor="w", padx=10, pady=10)
+            CTkLabel(card, text=f"Mesa {ch.get('mesa_numero', '-')} | Tipo: {ch.get('tipo', '-')} | Status: {ch.get('status', '-')}").pack(anchor="w", padx=10, pady=10)
 
     # =====================================================
-    # CONFIGURAÇÕES
+    # INTEGRAÇÕES
+    # =====================================================
+
+    def whatsapp_screen(self):
+        self._current_screen = self.whatsapp_screen
+        self.integration_screen("WhatsApp", "whatsapp")
+
+    def aiqfome_screen(self):
+        self._current_screen = self.aiqfome_screen
+        self.integration_screen("aiqfome", "aiqfome")
+
+    def comer_aqui_screen(self):
+        self._current_screen = self.comer_aqui_screen
+        self.integration_screen("Comer Aqui", "comer_aqui")
+
+    def integration_screen(self, title, modulo):
+        self.build_shell(title)
+        self.empresa_sidebar()
+
+        if not self.has_modulo(modulo):
+            self.blocked_module(modulo)
+            return
+
+        box = CTkScrollableFrame(self.content)
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+
+        r, cfg = self.request_json("GET", f"{self.api}/configuracoes", params={"token": self.token})
+        if r.status_code != 200:
+            self.api_error("Erro", cfg, "Falha ao carregar configurações")
+            return
+
+        CTkLabel(box, text=title, font=("Arial", 22, "bold")).pack(anchor="w", pady=(5, 10))
+
+        if modulo == "whatsapp":
+            self.int_1 = CTkEntry(box, placeholder_text="Número WhatsApp")
+            self.int_1.pack(fill="x", pady=5)
+            self.int_1.insert(0, cfg.get("whatsapp_numero", ""))
+
+            self.int_2 = CTkEntry(box, placeholder_text="Token WhatsApp")
+            self.int_2.pack(fill="x", pady=5)
+            self.int_2.insert(0, cfg.get("whatsapp_token", ""))
+
+            self.int_3 = CTkEntry(box, placeholder_text="Webhook WhatsApp")
+            self.int_3.pack(fill="x", pady=5)
+            self.int_3.insert(0, cfg.get("whatsapp_webhook", ""))
+
+            def salvar():
+                self.save_configs_extra({
+                    "whatsapp_numero": self.int_1.get().strip(),
+                    "whatsapp_token": self.int_2.get().strip(),
+                    "whatsapp_webhook": self.int_3.get().strip(),
+                })
+
+        elif modulo == "aiqfome":
+            self.int_1 = CTkEntry(box, placeholder_text="Token aiqfome")
+            self.int_1.pack(fill="x", pady=5)
+            self.int_1.insert(0, cfg.get("aiqfome_token", ""))
+
+            self.int_2 = CTkEntry(box, placeholder_text="ID/Nome da loja aiqfome")
+            self.int_2.pack(fill="x", pady=5)
+            self.int_2.insert(0, cfg.get("aiqfome_loja", ""))
+
+            def salvar():
+                self.save_configs_extra({
+                    "aiqfome_token": self.int_1.get().strip(),
+                    "aiqfome_loja": self.int_2.get().strip(),
+                })
+
+        else:
+            self.int_1 = CTkEntry(box, placeholder_text="Token Comer Aqui")
+            self.int_1.pack(fill="x", pady=5)
+            self.int_1.insert(0, cfg.get("comer_aqui_token", ""))
+
+            self.int_2 = CTkEntry(box, placeholder_text="ID/Nome da loja Comer Aqui")
+            self.int_2.pack(fill="x", pady=5)
+            self.int_2.insert(0, cfg.get("comer_aqui_loja", ""))
+
+            def salvar():
+                self.save_configs_extra({
+                    "comer_aqui_token": self.int_1.get().strip(),
+                    "comer_aqui_loja": self.int_2.get().strip(),
+                })
+
+        CTkButton(box, text="Salvar integração", command=salvar).pack(pady=15)
+
+    def save_configs_extra(self, extra):
+        r0, cfg = self.request_json("GET", f"{self.api}/configuracoes", params={"token": self.token})
+        if r0.status_code != 200:
+            self.api_error("Erro", cfg, "Falha ao ler configurações")
+            return
+
+        payload = {
+            "token": self.token,
+            "whatsapp_numero": cfg.get("whatsapp_numero", ""),
+            "whatsapp_token": cfg.get("whatsapp_token", ""),
+            "whatsapp_webhook": cfg.get("whatsapp_webhook", ""),
+            "aiqfome_token": cfg.get("aiqfome_token", ""),
+            "aiqfome_loja": cfg.get("aiqfome_loja", ""),
+            "comer_aqui_token": cfg.get("comer_aqui_token", ""),
+            "comer_aqui_loja": cfg.get("comer_aqui_loja", ""),
+            "ifood_token": cfg.get("ifood_token", ""),
+            "uber_token": cfg.get("uber_token", ""),
+            "pagamento_pix": cfg.get("pagamento_pix", True),
+            "pagamento_qrcode": cfg.get("pagamento_qrcode", True),
+            "pagamento_cartao_credito": cfg.get("pagamento_cartao_credito", True),
+            "pagamento_cartao_debito": cfg.get("pagamento_cartao_debito", True),
+            "pagamento_dinheiro": cfg.get("pagamento_dinheiro", True),
+            "impressora_nome": cfg.get("impressora_nome", ""),
+            "impressora_porta": cfg.get("impressora_porta", ""),
+            "impressora_largura": cfg.get("impressora_largura", "80mm"),
+            "impressora_corta_papel": cfg.get("impressora_corta_papel", True),
+        }
+        payload.update(extra)
+
+        r, data = self.request_json("POST", f"{self.api}/configuracoes/salvar", json=payload)
+        if r.status_code != 200:
+            self.api_error("Erro", data, "Falha ao salvar")
+            return
+        messagebox.showinfo("Sucesso", data.get("msg", "Configurações salvas"))
+
+    # =====================================================
+    # CONFIG GERAL
     # =====================================================
 
     def config_screen(self):
@@ -1387,116 +1291,64 @@ class App(CTk):
         box = CTkScrollableFrame(self.content)
         box.pack(fill="both", expand=True, padx=10, pady=10)
 
-        CTkLabel(box, text="Configurações gerais", font=("Arial", 20, "bold")).pack(anchor="w", pady=(5, 10))
-
-        self.cfg_whats_num = CTkEntry(box, placeholder_text="WhatsApp número")
-        self.cfg_whats_num.pack(fill="x", pady=5)
-
-        self.cfg_whats_token = CTkEntry(box, placeholder_text="WhatsApp token")
-        self.cfg_whats_token.pack(fill="x", pady=5)
+        r, cfg = self.request_json("GET", f"{self.api}/configuracoes", params={"token": self.token})
+        if r.status_code != 200:
+            self.api_error("Erro", cfg, "Falha ao carregar configurações")
+            return
 
         self.cfg_ifood = CTkEntry(box, placeholder_text="Token iFood")
         self.cfg_ifood.pack(fill="x", pady=5)
-
-        self.cfg_aiq = CTkEntry(box, placeholder_text="Token aiqfome")
-        self.cfg_aiq.pack(fill="x", pady=5)
+        self.cfg_ifood.insert(0, cfg.get("ifood_token", ""))
 
         self.cfg_uber = CTkEntry(box, placeholder_text="Token Uber")
         self.cfg_uber.pack(fill="x", pady=5)
+        self.cfg_uber.insert(0, cfg.get("uber_token", ""))
 
         self.cfg_imp_nome = CTkEntry(box, placeholder_text="Nome da impressora")
         self.cfg_imp_nome.pack(fill="x", pady=5)
+        self.cfg_imp_nome.insert(0, cfg.get("impressora_nome", ""))
 
-        self.cfg_imp_porta = CTkEntry(box, placeholder_text="Porta impressora")
+        self.cfg_imp_porta = CTkEntry(box, placeholder_text="Porta da impressora")
         self.cfg_imp_porta.pack(fill="x", pady=5)
+        self.cfg_imp_porta.insert(0, cfg.get("impressora_porta", ""))
 
-        self.cfg_imp_larg = CTkEntry(box, placeholder_text="Largura", width=200)
+        self.cfg_imp_larg = CTkEntry(box, placeholder_text="Largura", width=220)
         self.cfg_imp_larg.pack(fill="x", pady=5)
+        self.cfg_imp_larg.insert(0, cfg.get("impressora_largura", "80mm"))
 
         self.pg_pix = CTkCheckBox(box, text="PIX")
-        self.pg_pix.pack(anchor="w", pady=3)
-
         self.pg_qr = CTkCheckBox(box, text="QR Code")
-        self.pg_qr.pack(anchor="w", pady=3)
-
         self.pg_credito = CTkCheckBox(box, text="Cartão crédito")
-        self.pg_credito.pack(anchor="w", pady=3)
-
         self.pg_debito = CTkCheckBox(box, text="Cartão débito")
-        self.pg_debito.pack(anchor="w", pady=3)
-
         self.pg_dinheiro = CTkCheckBox(box, text="Dinheiro")
-        self.pg_dinheiro.pack(anchor="w", pady=3)
+        self.imp_corte = CTkCheckBox(box, text="Corte automático")
 
-        self.imp_corte = CTkCheckBox(box, text="Cortar papel automático")
-        self.imp_corte.pack(anchor="w", pady=3)
+        for ck in [self.pg_pix, self.pg_qr, self.pg_credito, self.pg_debito, self.pg_dinheiro, self.imp_corte]:
+            ck.pack(anchor="w", pady=3)
 
-        btns = CTkFrame(box, fg_color="transparent")
-        btns.pack(fill="x", pady=15)
+        if cfg.get("pagamento_pix", True): self.pg_pix.select()
+        if cfg.get("pagamento_qrcode", True): self.pg_qr.select()
+        if cfg.get("pagamento_cartao_credito", True): self.pg_credito.select()
+        if cfg.get("pagamento_cartao_debito", True): self.pg_debito.select()
+        if cfg.get("pagamento_dinheiro", True): self.pg_dinheiro.select()
+        if cfg.get("impressora_corta_papel", True): self.imp_corte.select()
 
-        CTkButton(btns, text="Salvar", command=self.save_configs).pack(side="left", padx=5)
-        CTkButton(btns, text="Testar WhatsApp", command=self.test_whatsapp).pack(side="left", padx=5)
-        CTkButton(btns, text="Testar Delivery", command=self.test_delivery).pack(side="left", padx=5)
+        CTkButton(box, text="Salvar", command=self.save_config_screen).pack(pady=15)
 
-        r, cfg = self.request_json("GET", f"{self.api}/configuracoes", params={"token": self.token})
-        if r.status_code == 200 and isinstance(cfg, dict):
-            self.set_entry(self.cfg_whats_num, cfg.get("whatsapp_numero", ""))
-            self.set_entry(self.cfg_whats_token, cfg.get("whatsapp_token", ""))
-            self.set_entry(self.cfg_ifood, cfg.get("ifood_token", ""))
-            self.set_entry(self.cfg_aiq, cfg.get("aiqfome_token", ""))
-            self.set_entry(self.cfg_uber, cfg.get("uber_token", ""))
-            self.set_entry(self.cfg_imp_nome, cfg.get("impressora_nome", ""))
-            self.set_entry(self.cfg_imp_porta, cfg.get("impressora_porta", ""))
-            self.set_entry(self.cfg_imp_larg, cfg.get("impressora_largura", "80mm"))
-
-            if cfg.get("pagamento_pix", True): self.pg_pix.select()
-            if cfg.get("pagamento_qrcode", True): self.pg_qr.select()
-            if cfg.get("pagamento_cartao_credito", True): self.pg_credito.select()
-            if cfg.get("pagamento_cartao_debito", True): self.pg_debito.select()
-            if cfg.get("pagamento_dinheiro", True): self.pg_dinheiro.select()
-            if cfg.get("impressora_corta_papel", True): self.imp_corte.select()
-
-    def save_configs(self):
-        r, data = self.request_json(
-            "POST",
-            f"{self.api}/configuracoes/salvar",
-            json={
-                "token": self.token,
-                "whatsapp_numero": self.cfg_whats_num.get().strip(),
-                "whatsapp_token": self.cfg_whats_token.get().strip(),
-                "whatsapp_webhook": "",
-                "ifood_token": self.cfg_ifood.get().strip(),
-                "aiqfome_token": self.cfg_aiq.get().strip(),
-                "uber_token": self.cfg_uber.get().strip(),
-                "pagamento_pix": self.pg_pix.get() == 1,
-                "pagamento_qrcode": self.pg_qr.get() == 1,
-                "pagamento_cartao_credito": self.pg_credito.get() == 1,
-                "pagamento_cartao_debito": self.pg_debito.get() == 1,
-                "pagamento_dinheiro": self.pg_dinheiro.get() == 1,
-                "impressora_nome": self.cfg_imp_nome.get().strip(),
-                "impressora_porta": self.cfg_imp_porta.get().strip(),
-                "impressora_largura": self.cfg_imp_larg.get().strip() or "80mm",
-                "impressora_corta_papel": self.imp_corte.get() == 1
-            }
-        )
-        if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao salvar")
-            return
-        messagebox.showinfo("Sucesso", data.get("msg", "Configurações salvas"))
-
-    def test_whatsapp(self):
-        r, data = self.request_json("POST", f"{self.api}/whatsapp/teste", params={"token": self.token})
-        if r.status_code != 200:
-            self.show_api_error("WhatsApp", data, "Bloqueado")
-            return
-        messagebox.showinfo("WhatsApp", data.get("msg", "Liberado"))
-
-    def test_delivery(self):
-        r, data = self.request_json("POST", f"{self.api}/delivery/teste", params={"token": self.token})
-        if r.status_code != 200:
-            self.show_api_error("Delivery", data, "Bloqueado")
-            return
-        messagebox.showinfo("Delivery", data.get("msg", "Liberado"))
+    def save_config_screen(self):
+        self.save_configs_extra({
+            "ifood_token": self.cfg_ifood.get().strip(),
+            "uber_token": self.cfg_uber.get().strip(),
+            "impressora_nome": self.cfg_imp_nome.get().strip(),
+            "impressora_porta": self.cfg_imp_porta.get().strip(),
+            "impressora_largura": self.cfg_imp_larg.get().strip() or "80mm",
+            "pagamento_pix": self.pg_pix.get() == 1,
+            "pagamento_qrcode": self.pg_qr.get() == 1,
+            "pagamento_cartao_credito": self.pg_credito.get() == 1,
+            "pagamento_cartao_debito": self.pg_debito.get() == 1,
+            "pagamento_dinheiro": self.pg_dinheiro.get() == 1,
+            "impressora_corta_papel": self.imp_corte.get() == 1,
+        })
 
     # =====================================================
     # GARÇOM
@@ -1509,11 +1361,8 @@ class App(CTk):
 
         box = CTkFrame(self.content)
         box.pack(fill="both", expand=True, padx=15, pady=15)
-
         CTkLabel(box, text="Módulo do Garçom", font=("Arial", 24, "bold")).pack(pady=15)
-        CTkLabel(box, text="Use o menu lateral para abrir mesas, comandas e lançar pedidos.").pack(pady=8)
-        CTkButton(box, text="Ir para Comandas", command=self.garcom_comandas_screen).pack(pady=8)
-        CTkButton(box, text="Ir para Pedidos", command=self.garcom_pedidos_screen).pack(pady=8)
+        CTkLabel(box, text="Use o menu lateral para consultar mesas, comandas e chamados.").pack(pady=8)
 
     def garcom_mesas_screen(self):
         self._current_screen = self.garcom_mesas_screen
@@ -1525,7 +1374,7 @@ class App(CTk):
 
         r, data = self.request_json("GET", f"{self.api}/mesas", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar mesas")
+            self.api_error("Erro", data, "Falha ao carregar mesas")
             return
 
         for mesa in data:
@@ -1546,23 +1395,20 @@ class App(CTk):
 
         self.g_mesa_id = CTkEntry(top, placeholder_text="ID da mesa", width=120)
         self.g_mesa_id.pack(side="left", padx=5)
-
         self.g_cliente_id = CTkEntry(top, placeholder_text="ID do cliente", width=120)
         self.g_cliente_id.pack(side="left", padx=5)
 
         CTkButton(top, text="Abrir Comanda", command=self.garcom_criar_comanda).pack(side="left", padx=5)
 
-        # usa endpoint empresa para listar
         r, data = self.request_json("GET", f"{self.api}/comandas", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar comandas")
+            self.api_error("Erro", data, "Falha ao carregar comandas")
             return
 
         for c in data:
             card = CTkFrame(box)
             card.pack(fill="x", padx=5, pady=5)
-            txt = f"Comanda {c.get('numero')} | ID {c.get('id')} | Mesa {c.get('mesa_numero', '-')}"
-            CTkLabel(card, text=txt).pack(anchor="w", padx=10, pady=10)
+            CTkLabel(card, text=f"Comanda {c.get('numero')} | ID {c.get('id')} | Mesa {c.get('mesa_numero', '-')}").pack(anchor="w", padx=10, pady=10)
 
     def garcom_criar_comanda(self):
         try:
@@ -1578,7 +1424,7 @@ class App(CTk):
             params={"token": self.token, "mesa_id": mesa_id, "cliente_id": cliente_id}
         )
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao abrir comanda")
+            self.api_error("Erro", data, "Falha ao abrir comanda")
             return
 
         messagebox.showinfo("Sucesso", f"Comanda {data.get('numero')} aberta")
@@ -1591,9 +1437,8 @@ class App(CTk):
 
         box = CTkFrame(self.content)
         box.pack(fill="both", expand=True, padx=15, pady=15)
-
-        CTkLabel(box, text="Use a tela da empresa -> Comandas -> Abrir Tela de Pedido", font=("Arial", 18, "bold")).pack(pady=15)
-        CTkLabel(box, text="Esse módulo já está pronto no backend.").pack(pady=10)
+        CTkLabel(box, text="Lançamento de pedido pelo garçom", font=("Arial", 22, "bold")).pack(pady=15)
+        CTkLabel(box, text="Use a tela de Comandas da empresa para lançar pedidos completos.").pack(pady=8)
 
     def garcom_chamados_screen(self):
         self._current_screen = self.garcom_chamados_screen
@@ -1605,33 +1450,13 @@ class App(CTk):
 
         r, data = self.request_json("GET", f"{self.api}/chamados", params={"token": self.token})
         if r.status_code != 200:
-            self.show_api_error("Erro", data, "Falha ao carregar chamados")
+            self.api_error("Erro", data, "Falha ao carregar chamados")
             return
 
         for ch in data:
             card = CTkFrame(box)
             card.pack(fill="x", padx=5, pady=5)
             CTkLabel(card, text=f"Mesa {ch.get('mesa_numero', '-')} | {ch.get('tipo', '-')} | {ch.get('status', '-')}").pack(anchor="w", padx=10, pady=10)
-
-    # =====================================================
-    # UTIL
-    # =====================================================
-
-    def modulo_block_screen(self, modulo):
-        box = CTkFrame(self.content)
-        box.pack(fill="both", expand=True, padx=20, pady=20)
-
-        CTkLabel(box, text="Módulo não ativo", font=("Arial", 24, "bold")).pack(pady=18)
-        CTkLabel(
-            box,
-            text=f"O módulo '{modulo}' não está ativo para esta empresa.",
-            font=("Arial", 15)
-        ).pack(pady=8)
-        CTkLabel(
-            box,
-            text="Ative esse módulo no painel admin para liberar esta tela.",
-            font=("Arial", 14)
-        ).pack(pady=8)
 
 
 if __name__ == "__main__":

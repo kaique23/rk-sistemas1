@@ -5,3 +5,5 @@ PyJWT
 psycopg2-binary
 pydantic
 email-validator
+requests
+customtkinter
