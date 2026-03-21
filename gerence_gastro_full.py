@@ -165,6 +165,17 @@ async def lifespan(app: FastAPI):
         )
         """)
 
+        # garante colunas em banco antigo
+        cur.execute("""
+        ALTER TABLE assinaturas
+        ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'ativo'
+        """)
+
+        cur.execute("""
+        ALTER TABLE assinaturas
+        ADD COLUMN IF NOT EXISTS vencimento DATE
+        """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS produtos (
             id SERIAL PRIMARY KEY,
