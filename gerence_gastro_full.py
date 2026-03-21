@@ -166,16 +166,6 @@ async def lifespan(app: FastAPI):
         """)
 
         cur.execute("""
-        ALTER TABLE assinaturas
-        ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'ativo'
-        """)
-
-        cur.execute("""
-        ALTER TABLE assinaturas
-        ADD COLUMN IF NOT EXISTS vencimento DATE
-        """)
-
-        cur.execute("""
         CREATE TABLE IF NOT EXISTS produtos (
             id SERIAL PRIMARY KEY,
             empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
@@ -238,6 +228,114 @@ async def lifespan(app: FastAPI):
         )
         """)
 
+        # -------- CORREÇÕES PARA BANCOS ANTIGOS --------
+
+        # assinaturas
+        cur.execute("""
+        ALTER TABLE assinaturas
+        ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'ativo'
+        """)
+
+        cur.execute("""
+        ALTER TABLE assinaturas
+        ADD COLUMN IF NOT EXISTS vencimento DATE
+        """)
+
+        # planos
+        cur.execute("""
+        ALTER TABLE planos
+        ADD COLUMN IF NOT EXISTS whatsapp BOOLEAN DEFAULT FALSE
+        """)
+
+        cur.execute("""
+        ALTER TABLE planos
+        ADD COLUMN IF NOT EXISTS delivery BOOLEAN DEFAULT FALSE
+        """)
+
+        cur.execute("""
+        ALTER TABLE planos
+        ADD COLUMN IF NOT EXISTS relatorios BOOLEAN DEFAULT TRUE
+        """)
+
+        cur.execute("""
+        ALTER TABLE planos
+        ADD COLUMN IF NOT EXISTS financeiro BOOLEAN DEFAULT TRUE
+        """)
+
+        # produtos
+        cur.execute("""
+        ALTER TABLE produtos
+        ADD COLUMN IF NOT EXISTS estoque INTEGER NOT NULL DEFAULT 0
+        """)
+
+        cur.execute("""
+        ALTER TABLE produtos
+        ADD COLUMN IF NOT EXISTS tipo VARCHAR(20) NOT NULL DEFAULT 'produto'
+        """)
+
+        # configuracoes
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS whatsapp_numero TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS whatsapp_token TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS whatsapp_webhook TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS ifood_token TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS aiqfome_token TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS uber_token TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS pagamento_pix BOOLEAN DEFAULT TRUE
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS pagamento_qrcode BOOLEAN DEFAULT TRUE
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS pagamento_cartao_credito BOOLEAN DEFAULT TRUE
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS pagamento_cartao_debito BOOLEAN DEFAULT TRUE
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS pagamento_dinheiro BOOLEAN DEFAULT TRUE
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS impressora_nome TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS impressora_porta TEXT DEFAULT ''
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS impressora_largura TEXT DEFAULT '80mm'
+        """)
+        cur.execute("""
+        ALTER TABLE configuracoes
+        ADD COLUMN IF NOT EXISTS impressora_corta_papel BOOLEAN DEFAULT TRUE
+        """)
+
+        # admin padrão
         cur.execute("SELECT id FROM admin WHERE email = %s", ("admin@rksistemas.com",))
         if not cur.fetchone():
             senha_hash = bcrypt.hashpw("Admin@123".encode(), bcrypt.gensalt()).decode()
@@ -246,6 +344,7 @@ async def lifespan(app: FastAPI):
                 ("admin@rksistemas.com", senha_hash)
             )
 
+        # planos padrão
         cur.execute("SELECT COUNT(*) AS total FROM planos")
         total_planos = int(cur.fetchone()["total"])
 
@@ -426,8 +525,7 @@ def listar_empresas_admin(token: str):
             LEFT JOIN planos p ON p.id = a.plano_id
             ORDER BY e.nome
         """)
-        empresas = cur.fetchall()
-        return empresas
+        return cur.fetchall()
     finally:
         cur.close()
         conn.close()

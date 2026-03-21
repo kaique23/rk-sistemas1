@@ -5,4 +5,3 @@ PyJWT
 psycopg2-binary
 pydantic
 email-validator
-python-dotenv
