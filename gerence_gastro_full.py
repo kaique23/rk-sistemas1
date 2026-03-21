@@ -71,7 +71,13 @@ def obter_assinatura_empresa(empresa_id: int):
         assinatura = cur.fetchone()
 
         if not assinatura:
-            raise HTTPException(status_code=403, detail="Empresa sem assinatura")
+            return {
+                "status": "ativo",
+                "whatsapp": False,
+                "delivery": False,
+                "relatorios": True,
+                "financeiro": True
+            }
 
         return assinatura
     finally:
