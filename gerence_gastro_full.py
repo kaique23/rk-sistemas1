@@ -400,24 +400,26 @@ def listar_empresas_admin(token: str):
     conn = conectar()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT
-            e.id,
-            e.nome,
-            e.email,
-            a.status,
-            a.vencimento,
-            p.nome AS plano_nome,
-            p.valor
-        FROM empresas e
-        LEFT JOIN assinaturas a ON a.empresa_id = e.id
-        LEFT JOIN planos p ON p.id = a.plano_id
-        ORDER BY e.nome
-    """)
-    empresas = cur.fetchall()
-
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("""
+            SELECT
+                e.id,
+                e.nome,
+                e.email,
+                COALESCE(a.status, 'sem_assinatura') AS status,
+                a.vencimento,
+                COALESCE(p.nome, '-') AS plano_nome,
+                COALESCE(p.valor, 0) AS valor
+            FROM empresas e
+            LEFT JOIN assinaturas a ON a.empresa_id = e.id
+            LEFT JOIN planos p ON p.id = a.plano_id
+            ORDER BY e.nome
+        """)
+        empresas = cur.fetchall()
+        return empresas
+    finally:
+        cur.close()
+        conn.close()
     return empresas
 
 
