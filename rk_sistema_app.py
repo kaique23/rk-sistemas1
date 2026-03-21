@@ -36,11 +36,12 @@ class App(CTk):
         self.api = "https://rk-sistemas1.onrender.com"
         self.token = None
         self.tipo_login = StringVar(value="empresa")
+
         self.usuario_tipo = None
-        self.plano_nome = "—"
-        self.modulos_ativos = []
         self.usuario_nome = ""
         self.usuario_cargo = ""
+        self.plano_nome = "—"
+        self.modulos_ativos = []
         self.permissoes_colaborador = {}
 
         self.sidebar = None
@@ -72,18 +73,6 @@ class App(CTk):
         if callable(self._current_screen):
             self._current_screen()
 
-    def has_colab_perm(self, perm):
-        if self.usuario_tipo != "colaborador":
-            return True
-        return bool(self.permissoes_colaborador.get(perm, False))
-
-    def can_show_menu(self, key):
-        if self.usuario_tipo == "empresa":
-            return True
-        if self.usuario_tipo != "colaborador":
-            return False
-        return self.has_colab_perm(key)
-
     def build_shell(self, title):
         self.clear()
 
@@ -99,7 +88,11 @@ class App(CTk):
             CTkLabel(right, text=f"Plano: {self.plano_nome}", font=("Arial", 12)).pack(side="left", padx=8)
 
         if self.usuario_nome:
-            CTkLabel(right, text=f"{self.usuario_nome} | {self.usuario_cargo}", font=("Arial", 13, "bold")).pack(side="left", padx=10)
+            CTkLabel(
+                right,
+                text=f"{self.usuario_nome} | {self.usuario_cargo}",
+                font=("Arial", 13, "bold")
+            ).pack(side="left", padx=10)
 
         CTkButton(right, text="Atualizar", width=90, command=self.refresh_screen).pack(side="left", padx=4)
         CTkButton(right, text="Sair", width=80, command=self.login_screen).pack(side="left", padx=4)
@@ -125,26 +118,19 @@ class App(CTk):
             self.plano_nome = "—"
             self.modulos_ativos = []
 
-    def has_modulo(self, modulo):
-        if self.usuario_tipo == "empresa":
-            return modulo in self.modulos_ativos
-        return True
-
-    def blocked_message(self, texto):
-        box = CTkFrame(self.content)
-        box.pack(fill="both", expand=True, padx=20, pady=20)
-        CTkLabel(box, text=texto, font=("Arial", 22, "bold")).pack(pady=20)
-
-    # LOGIN
+    def has_colab_perm(self, perm):
+        if self.usuario_tipo != "colaborador":
+            return True
+        return bool(self.permissoes_colaborador.get(perm, False))
 
     def login_screen(self):
         self.clear()
         self.token = None
         self.usuario_tipo = None
-        self.plano_nome = "—"
-        self.modulos_ativos = []
         self.usuario_nome = ""
         self.usuario_cargo = ""
+        self.plano_nome = "—"
+        self.modulos_ativos = []
         self.permissoes_colaborador = {}
 
         box = CTkFrame(self)
@@ -178,10 +164,6 @@ class App(CTk):
         email = self.login_email.get().strip()
         senha = self.login_senha.get().strip()
 
-        if not email or not senha:
-            messagebox.showwarning("Aviso", "Preencha email e senha.")
-            return
-
         rota = {
             "empresa": "/empresa/login",
             "admin": "/admin/login",
@@ -212,8 +194,6 @@ class App(CTk):
             self.permissoes_colaborador = data.get("permissoes", {})
             self.colaborador_dashboard_screen()
 
-    # SIDEBARS
-
     def admin_sidebar(self):
         for w in self.sidebar.winfo_children():
             w.destroy()
@@ -230,18 +210,6 @@ class App(CTk):
         botoes = [
             ("Dashboard", self.dashboard_screen),
             ("Colaboradores", self.colaboradores_screen),
-            ("Categorias", self.categorias_screen),
-            ("Produtos", self.produtos_screen),
-            ("Clientes", self.clientes_screen),
-            ("Fornecedores", self.fornecedores_screen),
-            ("Mesas", self.mesas_screen),
-            ("Comandas", self.comandas_screen),
-            ("Pedidos", self.pedidos_screen),
-            ("KDS Cozinha", self.kds_cozinha_screen),
-            ("KDS Bar", self.kds_bar_screen),
-            ("Entregadores", self.entregadores_screen),
-            ("Chamados", self.chamados_screen),
-            ("Configurações", self.config_screen),
         ]
 
         for texto, cmd in botoes:
@@ -254,32 +222,13 @@ class App(CTk):
         CTkLabel(self.sidebar, text="Colaborador", font=("Arial", 18, "bold")).pack(pady=15)
         CTkButton(self.sidebar, text="Dashboard", command=self.colaborador_dashboard_screen).pack(fill="x", padx=12, pady=4)
 
-        mapa = [
-            ("frente_caixa", "Frente de Caixa", self.frente_caixa_screen),
-            ("estoque", "Estoque", self.estoque_screen),
-            ("fiscal", "Fiscal", self.fiscal_screen),
-            ("financeiro", "Financeiro", self.financeiro_screen),
-            ("clientes", "Clientes", self.colab_clientes_screen),
-            ("fornecedores", "Fornecedores", self.colab_fornecedores_screen),
-            ("funcionarios", "Colaboradores", self.colab_colaboradores_screen),
-            ("mesas", "Mesas", self.colab_mesas_screen),
-            ("comandas", "Comandas", self.colab_comandas_screen),
-            ("pedidos", "Pedidos", self.colab_pedidos_screen),
-            ("kds_cozinha", "KDS Cozinha", self.colab_kds_cozinha_screen),
-            ("kds_bar", "KDS Bar", self.colab_kds_bar_screen),
-            ("delivery", "Delivery", self.colab_delivery_screen),
-            ("relatorios", "Relatórios", self.relatorios_screen),
-            ("configuracoes", "Configurações", self.colab_config_screen),
-            ("whatsapp", "WhatsApp", self.colab_whatsapp_screen),
-            ("aiqfome", "aiqfome", self.colab_aiqfome_screen),
-            ("comer_aqui", "Comer Aqui", self.colab_comer_aqui_screen),
-        ]
-
-        for perm, texto, cmd in mapa:
-            if self.can_show_menu(perm):
-                CTkButton(self.sidebar, text=texto, command=cmd).pack(fill="x", padx=12, pady=4)
-
-    # ADMIN GLOBAL
+        for key, label in PERMISSOES_COLABORADOR:
+            if self.has_colab_perm(key):
+                CTkButton(
+                    self.sidebar,
+                    text=label,
+                    command=lambda l=label: self.colab_perm_screen(l)
+                ).pack(fill="x", padx=12, pady=4)
 
     def admin_empresas_screen(self):
         self._current_screen = self.admin_empresas_screen
@@ -306,19 +255,6 @@ class App(CTk):
 
         CTkButton(left, text="Criar Empresa", command=self.admin_criar_empresa).pack(pady=12)
 
-        self.admin_empresa_id = CTkEntry(left, placeholder_text="ID da empresa", width=300)
-        self.admin_empresa_id.pack(pady=5)
-
-        self.admin_plano_id = CTkEntry(left, placeholder_text="ID do plano", width=300)
-        self.admin_plano_id.pack(pady=5)
-
-        CTkButton(left, text="Trocar Plano", command=self.admin_trocar_plano).pack(pady=8)
-
-        self.admin_status = CTkOptionMenu(left, values=["ativo", "pausado", "bloqueado", "cancelado"])
-        self.admin_status.pack(pady=5)
-
-        CTkButton(left, text="Alterar Status", command=self.admin_alterar_status).pack(pady=8)
-
         r, empresas = self.request_json("GET", f"{self.api}/admin/empresas", params={"token": self.token})
         if r.status_code != 200:
             self.api_error("Erro", empresas, "Falha ao carregar empresas")
@@ -335,60 +271,21 @@ class App(CTk):
             CTkButton(card, text="Ver módulos", command=lambda eid=emp["id"]: self.admin_modulos_popup(eid)).pack(anchor="e", padx=10, pady=(0, 10))
 
     def admin_criar_empresa(self):
-        nome = self.admin_nome.get().strip()
-        email = self.admin_email.get().strip()
-        senha = self.admin_senha.get().strip()
-
         r, data = self.request_json(
             "POST",
             f"{self.api}/admin/empresa",
             params={"token": self.token},
-            json={"nome": nome, "email": email, "senha": senha}
+            json={
+                "nome": self.admin_nome.get().strip(),
+                "email": self.admin_email.get().strip(),
+                "senha": self.admin_senha.get().strip()
+            }
         )
         if r.status_code != 200:
             self.api_error("Erro", data, "Falha ao criar empresa")
             return
 
         messagebox.showinfo("Sucesso", data.get("msg", "Empresa criada"))
-        self.admin_empresas_screen()
-
-    def admin_trocar_plano(self):
-        try:
-            empresa_id = int(self.admin_empresa_id.get().strip())
-            plano_id = int(self.admin_plano_id.get().strip())
-        except Exception:
-            messagebox.showwarning("Aviso", "IDs inválidos.")
-            return
-
-        r, data = self.request_json(
-            "POST",
-            f"{self.api}/admin/empresa/plano",
-            params={"token": self.token, "empresa_id": empresa_id, "plano_id": plano_id}
-        )
-        if r.status_code != 200:
-            self.api_error("Erro", data, "Falha ao trocar plano")
-            return
-
-        messagebox.showinfo("Sucesso", data.get("msg", "Plano atualizado"))
-        self.admin_empresas_screen()
-
-    def admin_alterar_status(self):
-        try:
-            empresa_id = int(self.admin_empresa_id.get().strip())
-        except Exception:
-            messagebox.showwarning("Aviso", "ID inválido.")
-            return
-
-        r, data = self.request_json(
-            "POST",
-            f"{self.api}/admin/empresa/status",
-            params={"token": self.token, "empresa_id": empresa_id, "status": self.admin_status.get()}
-        )
-        if r.status_code != 200:
-            self.api_error("Erro", data, "Falha ao alterar status")
-            return
-
-        messagebox.showinfo("Sucesso", data.get("msg", "Status alterado"))
         self.admin_empresas_screen()
 
     def admin_modulos_popup(self, empresa_id):
@@ -432,20 +329,18 @@ class App(CTk):
 
         CTkButton(frame, text="Salvar módulos", command=salvar).pack(pady=15)
 
-    # EMPRESA
-
     def dashboard_screen(self):
         self._current_screen = self.dashboard_screen
         self.load_empresa_context()
         self.build_shell("Empresa - Dashboard")
         self.empresa_sidebar()
 
-        box = CTkScrollableFrame(self.content)
-        box.pack(fill="both", expand=True, padx=10, pady=10)
+        box = CTkFrame(self.content)
+        box.pack(fill="both", expand=True, padx=20, pady=20)
 
-        CTkLabel(box, text="Resumo da empresa", font=("Arial", 22, "bold")).pack(anchor="w", pady=(5, 10))
-        CTkLabel(box, text=f"Plano: {self.plano_nome}").pack(anchor="w", pady=3)
-        CTkLabel(box, text=f"Módulos ativos: {', '.join(self.modulos_ativos) if self.modulos_ativos else 'Nenhum'}", wraplength=1000, justify="left").pack(anchor="w", pady=3)
+        CTkLabel(box, text="Dashboard", font=("Arial", 24, "bold")).pack(pady=15)
+        CTkLabel(box, text=f"Plano: {self.plano_nome}").pack(pady=6)
+        CTkLabel(box, text=f"Módulos ativos: {', '.join(self.modulos_ativos) if self.modulos_ativos else 'Nenhum'}", wraplength=1000, justify="left").pack(pady=6)
 
     def colaboradores_screen(self):
         self._current_screen = self.colaboradores_screen
@@ -478,7 +373,6 @@ class App(CTk):
 
         CTkLabel(left, text="Permissões", font=("Arial", 16, "bold")).pack(pady=(12, 8))
 
-        self.col_checks = {}
         self.col_vars = {}
         perms_frame = CTkScrollableFrame(left, width=340, height=300)
         perms_frame.pack(pady=5)
@@ -488,7 +382,6 @@ class App(CTk):
             ck = CTkCheckBox(perms_frame, text=label, variable=var, onvalue=True, offvalue=False)
             ck.pack(anchor="w", pady=4)
             self.col_vars[key] = var
-            self.col_checks[key] = ck
 
         CTkButton(left, text="Salvar Colaborador", command=self.criar_colaborador).pack(pady=12)
 
@@ -506,9 +399,18 @@ class App(CTk):
 
             perms = col.get("permissoes", {})
             ativas = [label for key, label in PERMISSOES_COLABORADOR if perms.get(key)]
-            CTkLabel(card, text="Permissões: " + (", ".join(ativas) if ativas else "Nenhuma"), wraplength=850, justify="left").pack(anchor="w", padx=10, pady=(3, 8))
+            CTkLabel(
+                card,
+                text="Permissões: " + (", ".join(ativas) if ativas else "Nenhuma"),
+                wraplength=850,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(3, 8))
 
-            CTkButton(card, text="Editar permissões", command=lambda c=col: self.editar_permissoes_popup(c)).pack(anchor="e", padx=10, pady=(0, 10))
+            CTkButton(
+                card,
+                text="Editar permissões",
+                command=lambda c=col: self.editar_permissoes_popup(c)
+            ).pack(anchor="e", padx=10, pady=(0, 10))
 
     def criar_colaborador(self):
         permissoes = {k: bool(v.get()) for k, v in self.col_vars.items()}
@@ -580,22 +482,6 @@ class App(CTk):
 
         CTkButton(frame, text="Salvar permissões", command=salvar).pack(pady=15)
 
-    # telas simples empresa
-    def categorias_screen(self): self.simple_info_screen("Categorias")
-    def produtos_screen(self): self.simple_info_screen("Produtos")
-    def clientes_screen(self): self.simple_info_screen("Clientes")
-    def fornecedores_screen(self): self.simple_info_screen("Fornecedores")
-    def mesas_screen(self): self.simple_info_screen("Mesas")
-    def comandas_screen(self): self.simple_info_screen("Comandas")
-    def pedidos_screen(self): self.simple_info_screen("Pedidos")
-    def kds_cozinha_screen(self): self.simple_info_screen("KDS Cozinha")
-    def kds_bar_screen(self): self.simple_info_screen("KDS Bar")
-    def entregadores_screen(self): self.simple_info_screen("Entregadores")
-    def chamados_screen(self): self.simple_info_screen("Chamados")
-    def config_screen(self): self.simple_info_screen("Configurações")
-
-    # COLABORADOR
-
     def colaborador_dashboard_screen(self):
         self._current_screen = self.colaborador_dashboard_screen
         self.build_shell("Colaborador - Dashboard")
@@ -611,48 +497,15 @@ class App(CTk):
         CTkLabel(box, text="Permissões liberadas:", font=("Arial", 18, "bold")).pack(pady=(18, 8))
         CTkLabel(box, text=", ".join(liberadas) if liberadas else "Nenhuma", wraplength=1000, justify="left").pack(pady=6)
 
-    def frente_caixa_screen(self): self.colab_simple_perm_screen("Frente de Caixa", "frente_caixa")
-    def estoque_screen(self): self.colab_simple_perm_screen("Estoque", "estoque")
-    def fiscal_screen(self): self.colab_simple_perm_screen("Fiscal", "fiscal")
-    def financeiro_screen(self): self.colab_simple_perm_screen("Financeiro", "financeiro")
-    def colab_clientes_screen(self): self.colab_simple_perm_screen("Clientes", "clientes")
-    def colab_fornecedores_screen(self): self.colab_simple_perm_screen("Fornecedores", "fornecedores")
-    def colab_colaboradores_screen(self): self.colab_simple_perm_screen("Colaboradores", "funcionarios")
-    def colab_mesas_screen(self): self.colab_simple_perm_screen("Mesas", "mesas")
-    def colab_comandas_screen(self): self.colab_simple_perm_screen("Comandas", "comandas")
-    def colab_pedidos_screen(self): self.colab_simple_perm_screen("Pedidos", "pedidos")
-    def colab_kds_cozinha_screen(self): self.colab_simple_perm_screen("KDS Cozinha", "kds_cozinha")
-    def colab_kds_bar_screen(self): self.colab_simple_perm_screen("KDS Bar", "kds_bar")
-    def colab_delivery_screen(self): self.colab_simple_perm_screen("Delivery", "delivery")
-    def relatorios_screen(self): self.colab_simple_perm_screen("Relatórios", "relatorios")
-    def colab_config_screen(self): self.colab_simple_perm_screen("Configurações", "configuracoes")
-    def colab_whatsapp_screen(self): self.colab_simple_perm_screen("WhatsApp", "whatsapp")
-    def colab_aiqfome_screen(self): self.colab_simple_perm_screen("aiqfome", "aiqfome")
-    def colab_comer_aqui_screen(self): self.colab_simple_perm_screen("Comer Aqui", "comer_aqui")
-
-    def colab_simple_perm_screen(self, title, perm):
-        self._current_screen = lambda: self.colab_simple_perm_screen(title, perm)
-        self.build_shell(title)
+    def colab_perm_screen(self, titulo):
+        self._current_screen = lambda: self.colab_perm_screen(titulo)
+        self.build_shell(titulo)
         self.colaborador_sidebar()
 
-        if not self.has_colab_perm(perm):
-            self.blocked_message(f"Sem permissão para acessar: {title}")
-            return
-
         box = CTkFrame(self.content)
         box.pack(fill="both", expand=True, padx=20, pady=20)
-        CTkLabel(box, text=title, font=("Arial", 24, "bold")).pack(pady=20)
+        CTkLabel(box, text=titulo, font=("Arial", 24, "bold")).pack(pady=20)
         CTkLabel(box, text=f"Tela liberada para {self.usuario_nome}.").pack(pady=8)
-
-    def simple_info_screen(self, title):
-        self._current_screen = lambda: self.simple_info_screen(title)
-        self.build_shell(title)
-        self.empresa_sidebar()
-
-        box = CTkFrame(self.content)
-        box.pack(fill="both", expand=True, padx=20, pady=20)
-        CTkLabel(box, text=title, font=("Arial", 24, "bold")).pack(pady=20)
-        CTkLabel(box, text="Essa tela segue liberada e você pode continuar ajustando a interface depois.").pack(pady=8)
 
 
 if __name__ == "__main__":
