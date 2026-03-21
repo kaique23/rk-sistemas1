@@ -165,7 +165,6 @@ async def lifespan(app: FastAPI):
         )
         """)
 
-        # garante colunas em banco antigo
         cur.execute("""
         ALTER TABLE assinaturas
         ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'ativo'
