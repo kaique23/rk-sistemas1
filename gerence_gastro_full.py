@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import bcrypt
@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
 from psycopg2.extras import RealDictCursor
 
-SECRET = os.getenv("SECRET", "rk_sistemas_secret_2026")
+SECRET = os.getenv("SECRET", "gsi_secret_2026")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 MODULOS_VALIDOS = {
@@ -47,14 +47,13 @@ PERMISSOES_VALIDAS = {
     "kds_bar",
     "delivery",
     "relatorios",
-    "configuracoes",
     "whatsapp",
     "aiqfome",
     "comer_aqui",
 }
 
-SETOR_IMPRESSAO_VALIDO = {"cozinha", "bar", "balcao", "nenhum"}
-TIPO_IMPRESSORA_VALIDO = {"cozinha", "bar", "balcao", "entrega", "fiscal"}
+TIPOS_IMPRESSORA = {"cozinha", "bar", "balcao", "entrega", "fiscal"}
+SETORES_IMPRESSAO = {"cozinha", "bar", "balcao", "nenhum"}
 
 
 def conectar():
@@ -63,8 +62,19 @@ def conectar():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
 def gerar_token(payload: dict) -> str:
     return jwt.encode(payload, SECRET, algorithm="HS256")
+
+
+def decodificar_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET, algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token inválido")
 
 
 def hash_senha(texto: str) -> str:
@@ -79,55 +89,32 @@ def gerar_codigo(prefixo: str) -> str:
     return f"{prefixo}-{uuid.uuid4().hex[:10].upper()}"
 
 
+def gerar_sid() -> str:
+    return uuid.uuid4().hex
+
+
 def verificar_admin(token: str) -> int:
-    try:
-        data = jwt.decode(token, SECRET, algorithms=["HS256"])
-        admin_id = data.get("admin")
-        if not admin_id:
-            raise ValueError
-        return int(admin_id)
-    except Exception:
+    data = decodificar_token(token)
+    admin_id = data.get("admin")
+    if not admin_id:
         raise HTTPException(status_code=401, detail="Apenas admin")
+    return int(admin_id)
 
 
 def verificar_empresa(token: str) -> int:
-    try:
-        data = jwt.decode(token, SECRET, algorithms=["HS256"])
-        empresa_id = data.get("empresa")
-        if not empresa_id:
-            raise ValueError
-        return int(empresa_id)
-    except Exception:
+    data = decodificar_token(token)
+    empresa_id = data.get("empresa")
+    if not empresa_id:
         raise HTTPException(status_code=401, detail="Token inválido")
+    return int(empresa_id)
 
 
 def verificar_colaborador(token: str) -> int:
-    try:
-        data = jwt.decode(token, SECRET, algorithms=["HS256"])
-        colaborador_id = data.get("colaborador")
-        if not colaborador_id:
-            raise ValueError
-        return int(colaborador_id)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token do colaborador inválido")
-
-
-def obter_modulos_empresa(empresa_id: int) -> set[str]:
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT modulo
-            FROM modulos_empresa
-            WHERE empresa_id = %s AND ativo = TRUE
-            """,
-            (empresa_id,),
-        )
-        return {row["modulo"] for row in cur.fetchall()}
-    finally:
-        cur.close()
-        conn.close()
+    data = decodificar_token(token)
+    colaborador_id = data.get("colaborador")
+    if not colaborador_id:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    return int(colaborador_id)
 
 
 def obter_assinatura_empresa(empresa_id: int):
@@ -175,13 +162,31 @@ def validar_empresa_ativa(empresa_id: int):
         )
 
 
-def obter_colaborador(colaborador_id: int):
+def obter_modulos_empresa(empresa_id: int) -> set[str]:
     conn = conectar()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            SELECT id, empresa_id, nome, cargo, email, ativo, permissoes_json
+            SELECT modulo
+            FROM modulos_empresa
+            WHERE empresa_id = %s AND ativo = TRUE
+            """,
+            (empresa_id,),
+        )
+        return {row["modulo"] for row in cur.fetchall()}
+    finally:
+        cur.close()
+        conn.close()
+
+
+def obter_permissoes_colaborador(colaborador_id: int) -> dict:
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT permissoes_json
             FROM funcionarios
             WHERE id = %s
             """,
@@ -190,54 +195,44 @@ def obter_colaborador(colaborador_id: int):
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Colaborador não encontrado")
-        return row
+        raw = row.get("permissoes_json") or "{}"
+        try:
+            perms = json.loads(raw)
+        except Exception:
+            perms = {}
+        final = {}
+        for p in PERMISSOES_VALIDAS:
+            final[p] = bool(perms.get(p, False))
+        return final
     finally:
         cur.close()
         conn.close()
 
 
-def obter_permissoes_colaborador(colaborador_id: int) -> dict:
-    row = obter_colaborador(colaborador_id)
-    raw = row.get("permissoes_json") or "{}"
-    try:
-        perms = json.loads(raw)
-    except Exception:
-        perms = {}
-
-    final = {}
-    for p in PERMISSOES_VALIDAS:
-        final[p] = bool(perms.get(p, False))
-    return final
-
-
-def exigir_permissao_colaborador(token: str, permissao: str) -> int:
-    if permissao not in PERMISSOES_VALIDAS:
-        raise HTTPException(status_code=400, detail="Permissão inválida")
-
-    colaborador_id = verificar_colaborador(token)
-    colaborador = obter_colaborador(colaborador_id)
-
-    if not colaborador["ativo"]:
-        raise HTTPException(status_code=403, detail="Colaborador inativo")
-
-    empresa_id = int(colaborador["empresa_id"])
-    validar_empresa_ativa(empresa_id)
-
-    permissoes = obter_permissoes_colaborador(colaborador_id)
-    if not permissoes.get(permissao, False):
-        raise HTTPException(status_code=403, detail=f"Sem permissão: {permissao}")
-
-    return empresa_id
-
-
-def exigir_modulo(empresa_id: int, modulo: str):
-    if modulo not in MODULOS_VALIDOS:
-        raise HTTPException(status_code=400, detail="Módulo inválido")
-    if modulo not in obter_modulos_empresa(empresa_id):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Módulo '{modulo}' não ativo para esta empresa",
+def registrar_sessao(cur, empresa_id: int, tipo: str, referencia_id: int) -> str:
+    sid = gerar_sid()
+    cur.execute(
+        """
+        INSERT INTO sessoes_ativas (
+            empresa_id, tipo_usuario, referencia_id, session_id, ativa, ultimo_ping
         )
+        VALUES (%s, %s, %s, %s, TRUE, NOW())
+        """,
+        (empresa_id, tipo, referencia_id, sid),
+    )
+    return sid
+
+
+def contar_sessoes_ativas(cur, empresa_id: int) -> int:
+    cur.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM sessoes_ativas
+        WHERE empresa_id = %s AND ativa = TRUE
+        """,
+        (empresa_id,),
+    )
+    return int(cur.fetchone()["total"])
 
 
 def numero_proxima_comanda(cur, empresa_id: int) -> int:
@@ -250,77 +245,6 @@ def numero_proxima_comanda(cur, empresa_id: int) -> int:
         (empresa_id,),
     )
     return int(cur.fetchone()["proximo"])
-
-
-def obter_configuracoes_empresa(empresa_id: int):
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT * FROM configuracoes WHERE empresa_id = %s", (empresa_id,))
-        return cur.fetchone()
-    finally:
-        cur.close()
-        conn.close()
-
-
-def criar_fila_impressao(
-    cur,
-    empresa_id: int,
-    impressora_id: int,
-    tipo: str,
-    conteudo: str,
-    pedido_id: Optional[int] = None,
-    comanda_id: Optional[int] = None,
-):
-    cur.execute(
-        """
-        INSERT INTO fila_impressao (
-            empresa_id, impressora_id, tipo, conteudo, status, pedido_id, comanda_id
-        )
-        VALUES (%s, %s, %s, %s, 'pendente', %s, %s)
-        """,
-        (empresa_id, impressora_id, tipo, conteudo, pedido_id, comanda_id),
-    )
-
-
-def montar_texto_producao(cabecalho: str, itens: list[dict], observacoes: str = "") -> str:
-    linhas = [cabecalho, "-" * 32]
-    for item in itens:
-        linhas.append(f"{item['quantidade']}x {item['nome_produto']}")
-        if item.get("observacoes"):
-            linhas.append(f"Obs: {item['observacoes']}")
-    if observacoes:
-        linhas.append("-" * 32)
-        linhas.append(f"Obs geral: {observacoes}")
-    linhas.append("-" * 32)
-    return "\n".join(linhas)
-
-
-def montar_texto_entregador(cliente_nome: str, endereco: str, itens: list[dict]) -> str:
-    linhas = [
-        "ENTREGA",
-        "-" * 32,
-        f"Cliente: {cliente_nome or '-'}",
-        f"Endereco: {endereco or '-'}",
-        "-" * 32,
-    ]
-    for item in itens:
-        linhas.append(f"{item['quantidade']}x {item['nome_produto']}")
-    linhas.append("-" * 32)
-    return "\n".join(linhas)
-
-
-def montar_texto_fiscal(comanda_numero: int, itens: list[dict], valor_total: float) -> str:
-    linhas = [
-        f"CUPOM - COMANDA {comanda_numero}",
-        "-" * 32,
-    ]
-    for item in itens:
-        subtotal = float(item["quantidade"]) * float(item["preco"])
-        linhas.append(f"{item['quantidade']}x {item['nome_produto']}  R$ {subtotal:.2f}")
-    linhas.append("-" * 32)
-    linhas.append(f"TOTAL: R$ {valor_total:.2f}")
-    return "\n".join(linhas)
 
 
 @asynccontextmanager
@@ -346,6 +270,8 @@ async def lifespan(app: FastAPI):
                 email VARCHAR(255) UNIQUE NOT NULL,
                 senha VARCHAR(255) NOT NULL,
                 ativa BOOLEAN DEFAULT TRUE,
+                limite_terminais INTEGER NOT NULL DEFAULT 1,
+                limite_impressoras INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT NOW()
             )
             """
@@ -391,6 +317,21 @@ async def lifespan(app: FastAPI):
 
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS sessoes_ativas (
+                id SERIAL PRIMARY KEY,
+                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+                tipo_usuario VARCHAR(30) NOT NULL,
+                referencia_id INTEGER NOT NULL,
+                session_id VARCHAR(80) UNIQUE NOT NULL,
+                ativa BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                ultimo_ping TIMESTAMP DEFAULT NOW()
+            )
+            """
+        )
+
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS funcionarios (
                 id SERIAL PRIMARY KEY,
                 empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
@@ -402,51 +343,6 @@ async def lifespan(app: FastAPI):
                 ativo BOOLEAN DEFAULT TRUE,
                 permissoes_json TEXT DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT NOW()
-            )
-            """
-        )
-
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS categorias (
-                id SERIAL PRIMARY KEY,
-                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-                nome VARCHAR(255) NOT NULL,
-                setor VARCHAR(20) NOT NULL DEFAULT 'cozinha',
-                ativo BOOLEAN NOT NULL DEFAULT TRUE
-            )
-            """
-        )
-
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS impressoras (
-                id SERIAL PRIMARY KEY,
-                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-                nome VARCHAR(255) NOT NULL,
-                tipo VARCHAR(30) NOT NULL,
-                conexao VARCHAR(255) DEFAULT '',
-                modelo VARCHAR(100) DEFAULT '',
-                ativa BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-            """
-        )
-
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS produtos (
-                id SERIAL PRIMARY KEY,
-                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-                categoria_id INTEGER REFERENCES categorias(id),
-                codigo VARCHAR(30) UNIQUE NOT NULL,
-                nome VARCHAR(255) NOT NULL,
-                preco NUMERIC(10,2) NOT NULL,
-                estoque INTEGER NOT NULL DEFAULT 0,
-                tipo VARCHAR(20) NOT NULL DEFAULT 'produto',
-                ativo BOOLEAN NOT NULL DEFAULT TRUE,
-                setor_impressao VARCHAR(20) NOT NULL DEFAULT 'nenhum',
-                impressora_id INTEGER REFERENCES impressoras(id)
             )
             """
         )
@@ -491,6 +387,51 @@ async def lifespan(app: FastAPI):
                 telefone VARCHAR(50) DEFAULT '',
                 ativo BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT NOW()
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS impressoras (
+                id SERIAL PRIMARY KEY,
+                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+                nome VARCHAR(255) NOT NULL,
+                tipo VARCHAR(30) NOT NULL,
+                conexao VARCHAR(255) DEFAULT '',
+                modelo VARCHAR(100) DEFAULT '',
+                ativa BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS categorias (
+                id SERIAL PRIMARY KEY,
+                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+                nome VARCHAR(255) NOT NULL,
+                setor VARCHAR(20) NOT NULL DEFAULT 'cozinha',
+                ativo BOOLEAN NOT NULL DEFAULT TRUE
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS produtos (
+                id SERIAL PRIMARY KEY,
+                empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+                categoria_id INTEGER REFERENCES categorias(id),
+                codigo VARCHAR(30) UNIQUE NOT NULL,
+                nome VARCHAR(255) NOT NULL,
+                preco NUMERIC(10,2) NOT NULL,
+                estoque INTEGER NOT NULL DEFAULT 0,
+                tipo VARCHAR(20) NOT NULL DEFAULT 'produto',
+                ativo BOOLEAN NOT NULL DEFAULT TRUE,
+                setor_impressao VARCHAR(20) NOT NULL DEFAULT 'nenhum',
+                impressora_id INTEGER REFERENCES impressoras(id)
             )
             """
         )
@@ -562,15 +503,6 @@ async def lifespan(app: FastAPI):
             CREATE TABLE IF NOT EXISTS configuracoes (
                 id SERIAL PRIMARY KEY,
                 empresa_id INTEGER UNIQUE NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-                whatsapp_numero TEXT DEFAULT '',
-                whatsapp_token TEXT DEFAULT '',
-                whatsapp_webhook TEXT DEFAULT '',
-                aiqfome_token TEXT DEFAULT '',
-                aiqfome_loja TEXT DEFAULT '',
-                comer_aqui_token TEXT DEFAULT '',
-                comer_aqui_loja TEXT DEFAULT '',
-                ifood_token TEXT DEFAULT '',
-                uber_token TEXT DEFAULT '',
                 impressora_fiscal_id INTEGER REFERENCES impressoras(id),
                 impressora_entrega_id INTEGER REFERENCES impressoras(id),
                 pagamento_pix BOOLEAN DEFAULT TRUE,
@@ -598,12 +530,14 @@ async def lifespan(app: FastAPI):
             """
         )
 
+        cur.execute("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS limite_terminais INTEGER NOT NULL DEFAULT 1")
+        cur.execute("ALTER TABLE empresas ADD COLUMN IF NOT EXISTS limite_impressoras INTEGER NOT NULL DEFAULT 0")
         cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS setor_impressao VARCHAR(20) NOT NULL DEFAULT 'nenhum'")
         cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS impressora_id INTEGER REFERENCES impressoras(id)")
         cur.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS endereco TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE comandas ADD COLUMN IF NOT EXISTS valor_total NUMERIC(10,2) DEFAULT 0")
         cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS impressora_fiscal_id INTEGER REFERENCES impressoras(id)")
         cur.execute("ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS impressora_entrega_id INTEGER REFERENCES impressoras(id)")
-        cur.execute("ALTER TABLE comandas ADD COLUMN IF NOT EXISTS valor_total NUMERIC(10,2) DEFAULT 0")
 
         cur.execute("SELECT id FROM admin WHERE email = %s", ("admin@rksistemas.com",))
         if not cur.fetchone():
@@ -640,6 +574,10 @@ class Login(BaseModel):
     senha: str
 
 
+class LogoutIn(BaseModel):
+    token: str
+
+
 class EmpresaCreate(BaseModel):
     nome: str
     email: EmailStr
@@ -650,6 +588,13 @@ class ModuloBulkUpdate(BaseModel):
     token: str
     empresa_id: int
     modulos: dict[str, bool]
+
+
+class LimitesEmpresaUpdate(BaseModel):
+    token: str
+    empresa_id: int
+    limite_terminais: int
+    limite_impressoras: int
 
 
 class ColaboradorCreate(BaseModel):
@@ -672,6 +617,7 @@ class ColaboradorPermissoesUpdate(BaseModel):
 
 class ImpressoraCreate(BaseModel):
     token: str
+    empresa_id: int
     nome: str
     tipo: Literal["cozinha", "bar", "balcao", "entrega", "fiscal"]
     conexao: str = ""
@@ -742,19 +688,6 @@ class PedidoCreate(BaseModel):
     observacoes: str = ""
 
 
-class FechamentoComanda(BaseModel):
-    token: str
-    forma_pagamento: Literal["pix", "credito", "debito", "dinheiro"]
-    imprimir_fiscal: bool = True
-    imprimir_entrega: bool = False
-
-
-class ConfigImpressaoUpdate(BaseModel):
-    token: str
-    impressora_fiscal_id: Optional[int] = None
-    impressora_entrega_id: Optional[int] = None
-
-
 @app.get("/")
 def home():
     return {"status": "ok", "sistema": "GSI Sistemas API"}
@@ -777,22 +710,54 @@ def login_admin(data: Login):
         conn.close()
 
 
+@app.post("/empresa/logout")
+def logout(data: LogoutIn):
+    payload = decodificar_token(data.token)
+    sid = payload.get("sid")
+    if not sid:
+        return {"msg": "Logout concluído"}
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE sessoes_ativas SET ativa = FALSE WHERE session_id = %s", (sid,))
+        conn.commit()
+        return {"msg": "Logout concluído"}
+    finally:
+        cur.close()
+        conn.close()
+
+
 @app.post("/empresa/login")
 def login_empresa(data: Login):
     conn = conectar()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, senha, nome FROM empresas WHERE email = %s", (data.email,))
+        cur.execute(
+            """
+            SELECT id, senha, nome, limite_terminais
+            FROM empresas
+            WHERE email = %s
+            """,
+            (data.email,),
+        )
         empresa = cur.fetchone()
         if not empresa:
             raise HTTPException(status_code=401, detail="Empresa não encontrada")
         if not confere_senha(data.senha, empresa["senha"]):
             raise HTTPException(status_code=401, detail="Senha inválida")
 
-        validar_empresa_ativa(int(empresa["id"]))
+        empresa_id = int(empresa["id"])
+        validar_empresa_ativa(empresa_id)
+
+        ativos = contar_sessoes_ativas(cur, empresa_id)
+        if ativos >= int(empresa["limite_terminais"]):
+            raise HTTPException(status_code=403, detail="Logins excedidos")
+
+        sid = registrar_sessao(cur, empresa_id, "empresa", empresa_id)
+        conn.commit()
 
         return {
-            "token": gerar_token({"empresa": int(empresa["id"])}),
+            "token": gerar_token({"empresa": empresa_id, "sid": sid}),
             "nome": empresa["nome"],
             "cargo": "Administrador do Estabelecimento",
         }
@@ -824,10 +789,20 @@ def login_colaborador(data: Login):
         if not confere_senha(data.senha, col["senha"]):
             raise HTTPException(status_code=401, detail="Senha inválida")
 
-        validar_empresa_ativa(int(col["empresa_id"]))
+        empresa_id = int(col["empresa_id"])
+        validar_empresa_ativa(empresa_id)
+
+        cur.execute("SELECT limite_terminais FROM empresas WHERE id = %s", (empresa_id,))
+        limite = int(cur.fetchone()["limite_terminais"])
+        ativos = contar_sessoes_ativas(cur, empresa_id)
+        if ativos >= limite:
+            raise HTTPException(status_code=403, detail="Logins excedidos")
+
+        sid = registrar_sessao(cur, empresa_id, "colaborador", int(col["id"]))
+        conn.commit()
 
         return {
-            "token": gerar_token({"colaborador": int(col["id"])}),
+            "token": gerar_token({"colaborador": int(col["id"]), "empresa_id": empresa_id, "sid": sid}),
             "nome": col["nome"],
             "cargo": col["cargo"],
             "permissoes": obter_permissoes_colaborador(int(col["id"])),
@@ -840,7 +815,6 @@ def login_colaborador(data: Login):
 @app.post("/admin/empresa")
 def criar_empresa(token: str, data: EmpresaCreate):
     verificar_admin(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -850,8 +824,8 @@ def criar_empresa(token: str, data: EmpresaCreate):
 
         cur.execute(
             """
-            INSERT INTO empresas (nome, email, senha)
-            VALUES (%s, %s, %s)
+            INSERT INTO empresas (nome, email, senha, limite_terminais, limite_impressoras)
+            VALUES (%s, %s, %s, 1, 0)
             RETURNING id
             """,
             (data.nome, data.email, hash_senha(data.senha)),
@@ -867,7 +841,7 @@ def criar_empresa(token: str, data: EmpresaCreate):
             INSERT INTO assinaturas (empresa_id, plano_id, status, vencimento)
             VALUES (%s, %s, 'ativo', %s)
             """,
-            (empresa_id, plano_id, (datetime.utcnow() + timedelta(days=30)).date()),
+            (empresa_id, plano_id, (utcnow() + timedelta(days=30)).date()),
         )
 
         cur.execute("INSERT INTO configuracoes (empresa_id) VALUES (%s)", (empresa_id,))
@@ -892,7 +866,6 @@ def criar_empresa(token: str, data: EmpresaCreate):
 @app.get("/admin/empresas")
 def listar_empresas_admin(token: str):
     verificar_admin(token)
-
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -902,6 +875,8 @@ def listar_empresas_admin(token: str):
                 e.id,
                 e.nome,
                 e.email,
+                e.limite_terminais,
+                e.limite_impressoras,
                 COALESCE(a.status, 'sem_assinatura') AS status,
                 a.vencimento,
                 COALESCE(p.nome, '-') AS plano_nome,
@@ -913,6 +888,28 @@ def listar_empresas_admin(token: str):
             """
         )
         return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/admin/empresa/limites")
+def salvar_limites_empresa(data: LimitesEmpresaUpdate):
+    verificar_admin(data.token)
+    conn = conectar()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE empresas
+            SET limite_terminais = %s,
+                limite_impressoras = %s
+            WHERE id = %s
+            """,
+            (data.limite_terminais, data.limite_impressoras, data.empresa_id),
+        )
+        conn.commit()
+        return {"msg": "Limites atualizados com sucesso"}
     finally:
         cur.close()
         conn.close()
@@ -986,10 +983,7 @@ def plano_da_empresa(token: str):
 @app.post("/colaboradores")
 def criar_colaborador(data: ColaboradorCreate):
     empresa_id = verificar_empresa(data.token)
-
-    permissoes_filtradas = {}
-    for p in PERMISSOES_VALIDAS:
-        permissoes_filtradas[p] = bool(data.permissoes.get(p, False))
+    permissoes_filtradas = {p: bool(data.permissoes.get(p, False)) for p in PERMISSOES_VALIDAS}
 
     conn = conectar()
     cur = conn.cursor()
@@ -1050,10 +1044,7 @@ def listar_colaboradores(token: str):
 @app.post("/colaboradores/permissoes/salvar")
 def salvar_permissoes_colaborador(data: ColaboradorPermissoesUpdate):
     empresa_id = verificar_empresa(data.token)
-    permissoes_filtradas = {}
-    for p in PERMISSOES_VALIDAS:
-        permissoes_filtradas[p] = bool(data.permissoes.get(p, False))
-
+    permissoes_filtradas = {p: bool(data.permissoes.get(p, False)) for p in PERMISSOES_VALIDAS}
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -1080,19 +1071,38 @@ def salvar_permissoes_colaborador(data: ColaboradorPermissoesUpdate):
         conn.close()
 
 
-@app.post("/impressoras")
+@app.post("/admin/impressoras")
 def criar_impressora(data: ImpressoraCreate):
-    empresa_id = verificar_empresa(data.token)
+    verificar_admin(data.token)
     conn = conectar()
     cur = conn.cursor()
     try:
+        if data.tipo not in TIPOS_IMPRESSORA:
+            raise HTTPException(status_code=400, detail="Tipo de impressora inválido")
+
+        cur.execute(
+            "SELECT limite_impressoras FROM empresas WHERE id = %s",
+            (data.empresa_id,),
+        )
+        emp = cur.fetchone()
+        if not emp:
+            raise HTTPException(status_code=404, detail="Empresa não encontrada")
+
+        cur.execute(
+            "SELECT COUNT(*) AS total FROM impressoras WHERE empresa_id = %s",
+            (data.empresa_id,),
+        )
+        total = int(cur.fetchone()["total"])
+        if total >= int(emp["limite_impressoras"]):
+            raise HTTPException(status_code=403, detail="Limite de impressoras atingido")
+
         cur.execute(
             """
             INSERT INTO impressoras (empresa_id, nome, tipo, conexao, modelo, ativa)
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (empresa_id, data.nome, data.tipo, data.conexao, data.modelo, data.ativa),
+            (data.empresa_id, data.nome, data.tipo, data.conexao, data.modelo, data.ativa),
         )
         iid = int(cur.fetchone()["id"])
         conn.commit()
@@ -1102,9 +1112,9 @@ def criar_impressora(data: ImpressoraCreate):
         conn.close()
 
 
-@app.get("/impressoras")
-def listar_impressoras(token: str):
-    empresa_id = verificar_empresa(token)
+@app.get("/admin/impressoras")
+def listar_impressoras_admin(token: str, empresa_id: int):
+    verificar_admin(token)
     conn = conectar()
     cur = conn.cursor()
     try:
@@ -1118,28 +1128,6 @@ def listar_impressoras(token: str):
             (empresa_id,),
         )
         return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.post("/configuracoes/impressao")
-def salvar_config_impressao(data: ConfigImpressaoUpdate):
-    empresa_id = verificar_empresa(data.token)
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            UPDATE configuracoes
-            SET impressora_fiscal_id = %s,
-                impressora_entrega_id = %s
-            WHERE empresa_id = %s
-            """,
-            (data.impressora_fiscal_id, data.impressora_entrega_id, empresa_id),
-        )
-        conn.commit()
-        return {"msg": "Configuração de impressão salva"}
     finally:
         cur.close()
         conn.close()
@@ -1292,8 +1280,7 @@ def listar_entregadores(token: str):
 @app.post("/produto")
 def criar_produto(data: ProdutoCreate):
     empresa_id = verificar_empresa(data.token)
-
-    if data.setor_impressao not in SETOR_IMPRESSAO_VALIDO:
+    if data.setor_impressao not in SETORES_IMPRESSAO:
         raise HTTPException(status_code=400, detail="Setor de impressão inválido")
 
     conn = conectar()
@@ -1437,274 +1424,6 @@ def criar_comanda(data: ComandaCreate):
         comanda_id = int(cur.fetchone()["id"])
         conn.commit()
         return {"msg": "Comanda criada", "id": comanda_id, "numero": numero}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/comandas")
-def listar_comandas(token: str):
-    empresa_id = verificar_empresa(token)
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT c.id, c.numero, c.status, c.valor_total, c.origem, c.created_at,
-                   m.numero AS mesa_numero,
-                   cl.nome AS cliente_nome
-            FROM comandas c
-            LEFT JOIN mesas m ON m.id = c.mesa_id
-            LEFT JOIN clientes cl ON cl.id = c.cliente_id
-            WHERE c.empresa_id = %s
-            ORDER BY c.created_at DESC
-            """,
-            (empresa_id,),
-        )
-        return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.post("/pedidos")
-def criar_pedido(data: PedidoCreate):
-    empresa_id = verificar_empresa(data.token)
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT id, numero, mesa_id, cliente_id, status
-            FROM comandas
-            WHERE id = %s AND empresa_id = %s
-            """,
-            (data.comanda_id, empresa_id),
-        )
-        comanda = cur.fetchone()
-        if not comanda:
-            raise HTTPException(status_code=404, detail="Comanda não encontrada")
-        if comanda["status"] != "aberta":
-            raise HTTPException(status_code=400, detail="Comanda não está aberta")
-
-        cur.execute(
-            """
-            INSERT INTO pedidos (empresa_id, comanda_id, mesa_id, cliente_id, origem, status, observacoes)
-            VALUES (%s, %s, %s, %s, %s, 'recebido', %s)
-            RETURNING id
-            """,
-            (
-                empresa_id,
-                data.comanda_id,
-                comanda["mesa_id"],
-                comanda["cliente_id"],
-                data.origem,
-                data.observacoes,
-            ),
-        )
-        pedido_id = int(cur.fetchone()["id"])
-
-        total = 0.0
-        grupos_impressao = {}
-
-        for item in data.itens:
-            cur.execute(
-                """
-                SELECT id, nome, preco, setor_impressao, impressora_id
-                FROM produtos
-                WHERE id = %s AND empresa_id = %s
-                """,
-                (item.produto_id, empresa_id),
-            )
-            prod = cur.fetchone()
-            if not prod:
-                raise HTTPException(status_code=404, detail=f"Produto {item.produto_id} não encontrado")
-
-            cur.execute(
-                """
-                INSERT INTO pedido_itens (
-                    pedido_id, produto_id, nome_produto, preco, quantidade, observacoes, setor_impressao, impressora_id
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    pedido_id,
-                    prod["id"],
-                    prod["nome"],
-                    prod["preco"],
-                    item.quantidade,
-                    item.observacoes,
-                    prod["setor_impressao"],
-                    prod["impressora_id"],
-                ),
-            )
-
-            total += float(prod["preco"]) * int(item.quantidade)
-
-            key = (prod["impressora_id"], prod["setor_impressao"])
-            if key not in grupos_impressao:
-                grupos_impressao[key] = []
-            grupos_impressao[key].append(
-                {
-                    "nome_produto": prod["nome"],
-                    "quantidade": item.quantidade,
-                    "observacoes": item.observacoes,
-                    "preco": float(prod["preco"]),
-                }
-            )
-
-        cur.execute(
-            """
-            UPDATE comandas
-            SET valor_total = COALESCE(valor_total, 0) + %s
-            WHERE id = %s
-            """,
-            (total, data.comanda_id),
-        )
-
-        cabecalho_base = f"PEDIDO {pedido_id} | COMANDA {comanda['numero']}"
-        for (impressora_id, setor), itens_grupo in grupos_impressao.items():
-            if impressora_id and setor in {"cozinha", "bar"}:
-                texto = montar_texto_producao(
-                    cabecalho=f"{cabecalho_base} | {setor.upper()}",
-                    itens=itens_grupo,
-                    observacoes=data.observacoes,
-                )
-                criar_fila_impressao(
-                    cur=cur,
-                    empresa_id=empresa_id,
-                    impressora_id=int(impressora_id),
-                    tipo=setor,
-                    conteudo=texto,
-                    pedido_id=pedido_id,
-                    comanda_id=data.comanda_id,
-                )
-
-        conn.commit()
-        return {"msg": "Pedido criado e fila de impressão gerada", "pedido_id": pedido_id}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/pedidos")
-def listar_pedidos(token: str):
-    empresa_id = verificar_empresa(token)
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT p.id, p.comanda_id, p.origem, p.status, p.observacoes, p.created_at,
-                   c.numero AS comanda_numero,
-                   m.numero AS mesa_numero,
-                   cl.nome AS cliente_nome
-            FROM pedidos p
-            LEFT JOIN comandas c ON c.id = p.comanda_id
-            LEFT JOIN mesas m ON m.id = p.mesa_id
-            LEFT JOIN clientes cl ON cl.id = p.cliente_id
-            WHERE p.empresa_id = %s
-            ORDER BY p.created_at DESC
-            """,
-            (empresa_id,),
-        )
-        return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.get("/fila-impressao")
-def listar_fila_impressao(token: str):
-    empresa_id = verificar_empresa(token)
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT f.id, f.tipo, f.status, f.conteudo, f.created_at,
-                   i.nome AS impressora_nome
-            FROM fila_impressao f
-            LEFT JOIN impressoras i ON i.id = f.impressora_id
-            WHERE f.empresa_id = %s
-            ORDER BY f.created_at DESC
-            """,
-            (empresa_id,),
-        )
-        return cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.post("/comandas/{comanda_id}/fechar")
-def fechar_comanda(comanda_id: int, data: FechamentoComanda):
-    empresa_id = verificar_empresa(data.token)
-    conn = conectar()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT c.id, c.numero, c.cliente_id, c.valor_total, cl.nome AS cliente_nome, cl.endereco
-            FROM comandas c
-            LEFT JOIN clientes cl ON cl.id = c.cliente_id
-            WHERE c.id = %s AND c.empresa_id = %s
-            """,
-            (comanda_id, empresa_id),
-        )
-        comanda = cur.fetchone()
-        if not comanda:
-            raise HTTPException(status_code=404, detail="Comanda não encontrada")
-
-        cur.execute(
-            """
-            SELECT nome_produto, quantidade, preco
-            FROM pedido_itens
-            WHERE pedido_id IN (
-                SELECT id FROM pedidos WHERE comanda_id = %s
-            )
-            ORDER BY id
-            """,
-            (comanda_id,),
-        )
-        itens = cur.fetchall()
-
-        cur.execute("UPDATE comandas SET status = 'fechada' WHERE id = %s", (comanda_id,))
-
-        cfg = obter_configuracoes_empresa(empresa_id)
-
-        if data.imprimir_fiscal and cfg and cfg.get("impressora_fiscal_id"):
-            texto_fiscal = montar_texto_fiscal(
-                comanda_numero=int(comanda["numero"]),
-                itens=itens,
-                valor_total=float(comanda["valor_total"] or 0),
-            )
-            criar_fila_impressao(
-                cur=cur,
-                empresa_id=empresa_id,
-                impressora_id=int(cfg["impressora_fiscal_id"]),
-                tipo="fiscal",
-                conteudo=texto_fiscal,
-                comanda_id=comanda_id,
-            )
-
-        if data.imprimir_entrega and cfg and cfg.get("impressora_entrega_id"):
-            texto_entrega = montar_texto_entregador(
-                cliente_nome=comanda.get("cliente_nome") or "",
-                endereco=comanda.get("endereco") or "",
-                itens=itens,
-            )
-            criar_fila_impressao(
-                cur=cur,
-                empresa_id=empresa_id,
-                impressora_id=int(cfg["impressora_entrega_id"]),
-                tipo="entrega",
-                conteudo=texto_entrega,
-                comanda_id=comanda_id,
-            )
-
-        conn.commit()
-        return {"msg": "Comanda fechada e impressões geradas"}
     finally:
         cur.close()
         conn.close()
