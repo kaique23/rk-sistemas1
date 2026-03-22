@@ -78,18 +78,47 @@ class App(CTk):
         self.logo_login = None
         self.logo_bg = None
         self.bg_label = None
-        self._carregar_logo()
 
+        self._carregar_logo()
         self.login_screen()
+
+    # =========================================================
+    # VISUAL / LOGO
+    # =========================================================
+
+    def _gerar_logo_transparente(self, img_rgba: Image.Image, alpha: int = 35) -> Image.Image:
+        nova = img_rgba.copy().convert("RGBA")
+        pixels = []
+        for r, g, b, a in nova.getdata():
+            if a == 0:
+                pixels.append((r, g, b, 0))
+            else:
+                pixels.append((r, g, b, alpha))
+        nova.putdata(pixels)
+        return nova
 
     def _carregar_logo(self):
         logo_path = "logo.png"
         if os.path.exists(logo_path):
             try:
-                img = Image.open(logo_path)
-                self.logo_top = CTkImage(light_image=img, dark_image=img, size=(110, 55))
-                self.logo_login = CTkImage(light_image=img, dark_image=img, size=(180, 90))
-                self.logo_bg = CTkImage(light_image=img, dark_image=img, size=(900, 450))
+                img = Image.open(logo_path).convert("RGBA")
+                img_bg = self._gerar_logo_transparente(img, alpha=35)
+
+                self.logo_top = CTkImage(
+                    light_image=img,
+                    dark_image=img,
+                    size=(110, 55)
+                )
+                self.logo_login = CTkImage(
+                    light_image=img,
+                    dark_image=img,
+                    size=(180, 90)
+                )
+                self.logo_bg = CTkImage(
+                    light_image=img_bg,
+                    dark_image=img_bg,
+                    size=(900, 450)
+                )
             except Exception:
                 self.logo_top = None
                 self.logo_login = None
@@ -139,6 +168,10 @@ class App(CTk):
             **kwargs
         )
 
+    # =========================================================
+    # API
+    # =========================================================
+
     def request_json(self, method, url, **kwargs):
         r = requests.request(method, url, timeout=30, **kwargs)
         try:
@@ -173,6 +206,10 @@ class App(CTk):
         if self.usuario_tipo != "colaborador":
             return True
         return bool(self.permissoes_colaborador.get(perm, False))
+
+    # =========================================================
+    # LOGIN
+    # =========================================================
 
     def login_screen(self):
         self.clear()
@@ -209,7 +246,13 @@ class App(CTk):
         tipo_frame = CTkFrame(box, fg_color=COR_CARD_2, corner_radius=12)
         tipo_frame.pack(fill="x", padx=20, pady=10)
 
-        CTkLabel(tipo_frame, text="Tipo de login", font=("Arial", 15, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=10, pady=(10, 5))
+        CTkLabel(
+            tipo_frame,
+            text="Tipo de login",
+            font=("Arial", 15, "bold"),
+            text_color=COR_TEXTO
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+
         CTkRadioButton(tipo_frame, text="Empresa", variable=self.tipo_login, value="empresa").pack(anchor="w", padx=15, pady=3)
         CTkRadioButton(tipo_frame, text="Admin Global", variable=self.tipo_login, value="admin").pack(anchor="w", padx=15, pady=3)
         CTkRadioButton(tipo_frame, text="Colaborador", variable=self.tipo_login, value="colaborador").pack(anchor="w", padx=15, pady=(3, 10))
@@ -269,6 +312,10 @@ class App(CTk):
             self.permissoes_colaborador = data.get("permissoes", {})
             self.colaborador_dashboard_screen()
 
+    # =========================================================
+    # SHELL
+    # =========================================================
+
     def build_shell(self, title):
         self.clear()
 
@@ -293,7 +340,12 @@ class App(CTk):
         else:
             CTkLabel(left_top, text="GSI", font=("Arial", 22, "bold"), text_color=COR_AZUL).pack(side="left", padx=(4, 8))
 
-        CTkLabel(left_top, text=title, font=("Arial", 24, "bold"), text_color=COR_TEXTO).pack(side="left", padx=8)
+        CTkLabel(
+            left_top,
+            text=title,
+            font=("Arial", 24, "bold"),
+            text_color=COR_TEXTO
+        ).pack(side="left", padx=8)
 
         right = CTkFrame(top, fg_color="transparent")
         right.pack(side="right", padx=12)
@@ -331,6 +383,10 @@ class App(CTk):
         self.content.pack(side="right", fill="both", expand=True)
 
         self._marca_dagua(self.content, relx=0.50, rely=0.50)
+
+    # =========================================================
+    # SIDEBARS
+    # =========================================================
 
     def admin_sidebar(self):
         for w in self.sidebar.winfo_children():
@@ -373,14 +429,12 @@ class App(CTk):
             if self.has_colab_perm(key):
                 cor = cores[idx % len(cores)]
                 hov = hovers[idx % len(hovers)]
-                self._botao(
-                    self.sidebar,
-                    label,
-                    lambda l=label: self.colab_perm_screen(l),
-                    color=cor,
-                    hover=hov
-                ).pack(fill="x", padx=12, pady=4)
+                self._botao(self.sidebar, label, lambda l=label: self.colab_perm_screen(l), color=cor, hover=hov).pack(fill="x", padx=12, pady=4)
                 idx += 1
+
+    # =========================================================
+    # POPUP CONFIG
+    # =========================================================
 
     def config_popup(self):
         top = CTkToplevel(self)
@@ -398,6 +452,10 @@ class App(CTk):
         self._botao(frame, "Pagamentos", lambda: self.placeholder_screen("Pagamentos"), color=COR_VERDE, hover=COR_VERDE_HOVER, width=240).pack(pady=6)
         self._botao(frame, "Integrações", lambda: self.placeholder_screen("Integrações"), color=COR_LARANJA, hover=COR_LARANJA_HOVER, width=240).pack(pady=6)
         self._botao(frame, "Fechar", top.destroy, color=COR_VERMELHO, hover=COR_VERMELHO_HOVER, width=240).pack(pady=14)
+
+    # =========================================================
+    # ADMIN
+    # =========================================================
 
     def admin_empresas_screen(self):
         self._current_screen = self.admin_empresas_screen
@@ -442,11 +500,7 @@ class App(CTk):
 
             CTkLabel(card, text=f"{emp['nome']} | ID {emp['id']}", font=("Arial", 16, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=10, pady=(10, 2))
             CTkLabel(card, text=f"Email: {emp['email']}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10)
-            CTkLabel(
-                card,
-                text=f"Plano: {emp.get('plano_nome', '-')} | Status: {emp.get('status', '-')}",
-                text_color=COR_SUBTEXTO
-            ).pack(anchor="w", padx=10, pady=(2, 10))
+            CTkLabel(card, text=f"Plano: {emp.get('plano_nome', '-')} | Status: {emp.get('status', '-')}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(2, 10))
 
             self._botao(card, "Ver módulos", lambda eid=emp["id"]: self.admin_modulos_popup(eid), color=COR_AZUL, hover=COR_AZUL_HOVER, width=130).pack(anchor="e", padx=10, pady=(0, 10))
 
@@ -474,13 +528,7 @@ class App(CTk):
         top.geometry("520x620")
         top.configure(fg_color=COR_FUNDO)
 
-        frame = CTkScrollableFrame(
-            top,
-            fg_color=COR_CARD,
-            corner_radius=14,
-            border_width=1,
-            border_color=COR_BORDA
-        )
+        frame = CTkScrollableFrame(top, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
 
         CTkLabel(frame, text=f"Módulos - Empresa {empresa_id}", font=("Arial", 20, "bold"), text_color=COR_TEXTO).pack(pady=10)
@@ -515,6 +563,10 @@ class App(CTk):
             top.destroy()
 
         self._botao(frame, "Salvar módulos", salvar, color=COR_VERDE, hover=COR_VERDE_HOVER).pack(pady=15)
+
+    # =========================================================
+    # EMPRESA
+    # =========================================================
 
     def dashboard_screen(self):
         self._current_screen = self.dashboard_screen
@@ -593,13 +645,7 @@ class App(CTk):
         left.pack(side="left", fill="y", padx=(10, 5), pady=10)
         left.pack_propagate(False)
 
-        right = CTkScrollableFrame(
-            self.content,
-            fg_color=COR_CARD,
-            corner_radius=14,
-            border_width=1,
-            border_color=COR_BORDA
-        )
+        right = CTkScrollableFrame(self.content, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
 
         self._titulo_card(left, "Novo colaborador")
@@ -647,13 +693,7 @@ class App(CTk):
 
             perms = col.get("permissoes", {})
             ativas = [label for key, label in PERMISSOES_COLABORADOR if perms.get(key)]
-            CTkLabel(
-                card,
-                text="Permissões: " + (", ".join(ativas) if ativas else "Nenhuma"),
-                wraplength=850,
-                justify="left",
-                text_color=COR_SUBTEXTO
-            ).pack(anchor="w", padx=10, pady=(3, 8))
+            CTkLabel(card, text="Permissões: " + (", ".join(ativas) if ativas else "Nenhuma"), wraplength=850, justify="left", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(3, 8))
 
             self._botao(card, "Editar permissões", lambda c=col: self.editar_permissoes_popup(c), color=COR_AZUL, hover=COR_AZUL_HOVER, width=150).pack(anchor="e", padx=10, pady=(0, 10))
 
@@ -686,13 +726,7 @@ class App(CTk):
         top.geometry("560x700")
         top.configure(fg_color=COR_FUNDO)
 
-        frame = CTkScrollableFrame(
-            top,
-            fg_color=COR_CARD,
-            corner_radius=14,
-            border_width=1,
-            border_color=COR_BORDA
-        )
+        frame = CTkScrollableFrame(top, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
 
         CTkLabel(frame, text=colaborador["nome"], font=("Arial", 20, "bold"), text_color=COR_TEXTO).pack(pady=8)
@@ -793,13 +827,7 @@ class App(CTk):
 
         liberadas = [label for key, label in PERMISSOES_COLABORADOR if self.permissoes_colaborador.get(key)]
         CTkLabel(box, text="Permissões liberadas:", font=("Arial", 18, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=14, pady=(18, 8))
-        CTkLabel(
-            box,
-            text=", ".join(liberadas) if liberadas else "Nenhuma",
-            wraplength=1000,
-            justify="left",
-            text_color=COR_SUBTEXTO
-        ).pack(anchor="w", padx=14, pady=6)
+        CTkLabel(box, text=", ".join(liberadas) if liberadas else "Nenhuma", wraplength=1000, justify="left", text_color=COR_SUBTEXTO).pack(anchor="w", padx=14, pady=6)
 
     def colab_perm_screen(self, titulo):
         self._current_screen = lambda: self.colab_perm_screen(titulo)
@@ -823,13 +851,7 @@ class App(CTk):
         for texto, cmd, cor, hover in botoes:
             self._botao(linha, texto, cmd, color=cor, hover=hover, width=170, height=46).pack(side="left", padx=6)
 
-        CTkLabel(
-            box,
-            text="As opções desta área foram agrupadas como sub-abas, sem ficar soltas no menu principal.",
-            text_color=COR_SUBTEXTO,
-            wraplength=1000,
-            justify="left"
-        ).pack(anchor="w", padx=14, pady=10)
+        CTkLabel(box, text="As opções desta área foram agrupadas como sub-abas, sem ficar soltas no menu principal.", text_color=COR_SUBTEXTO, wraplength=1000, justify="left").pack(anchor="w", padx=14, pady=10)
 
     def _simple_box(self, titulo, descricao):
         box = self._card(self.content)
