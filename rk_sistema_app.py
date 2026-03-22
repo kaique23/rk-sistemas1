@@ -77,6 +77,7 @@ class App(CTk):
         self.logo_top = None
         self.logo_login = None
         self.logo_bg = None
+        self.bg_label = None
         self._carregar_logo()
 
         self.login_screen()
@@ -92,7 +93,7 @@ class App(CTk):
                 img = Image.open(logo_path)
                 self.logo_top = CTkImage(light_image=img, dark_image=img, size=(110, 55))
                 self.logo_login = CTkImage(light_image=img, dark_image=img, size=(180, 90))
-                self.logo_bg = CTkImage(light_image=img, dark_image=img, size=(650, 320))
+                self.logo_bg = CTkImage(light_image=img, dark_image=img, size=(800, 400))
             except Exception:
                 self.logo_top = None
                 self.logo_login = None
@@ -102,10 +103,16 @@ class App(CTk):
         for w in self.winfo_children():
             w.destroy()
 
-    def _marca_dagua(self, parent, relx=0.60, rely=0.50):
+    def _marca_dagua(self, parent, relx=0.5, rely=0.5):
         if self.logo_bg:
-            lbl = CTkLabel(parent, text="", image=self.logo_bg)
-            lbl.place(relx=relx, rely=rely, anchor="center")
+            self.bg_label = CTkLabel(
+                parent,
+                text="",
+                image=self.logo_bg,
+                fg_color="transparent"
+            )
+            self.bg_label.place(relx=relx, rely=rely, anchor="center")
+            self.bg_label.lower()
 
     def _card(self, parent):
         return CTkFrame(
@@ -318,7 +325,6 @@ class App(CTk):
                 text_color=COR_TEXTO
             ).pack(side="left", padx=10)
 
-        # botão 3 barras no lugar de configurações
         self._botao(right, "☰", self.config_popup, color=COR_CINZA, hover=COR_CINZA_HOVER, width=42).pack(side="left", padx=4)
         self._botao(right, "Atualizar", self.refresh_screen, color=COR_LARANJA, hover=COR_LARANJA_HOVER, width=96).pack(side="left", padx=4)
         self._botao(right, "Sair", self.login_screen, color=COR_VERMELHO, hover=COR_VERMELHO_HOVER, width=80).pack(side="left", padx=4)
@@ -340,7 +346,7 @@ class App(CTk):
         self.content = CTkFrame(main, fg_color="transparent")
         self.content.pack(side="right", fill="both", expand=True)
 
-        self._marca_dagua(self.content, relx=0.68, rely=0.55)
+        self._marca_dagua(self.content, relx=0.65, rely=0.55)
 
     # =========================================================
     # SIDEBARS
@@ -884,6 +890,7 @@ class App(CTk):
         self.build_shell(titulo)
         self.empresa_sidebar()
         self._simple_box(titulo, "Tela mantida no sistema e pronta para receber a lógica completa.")
+
 
 if __name__ == "__main__":
     app = App()
