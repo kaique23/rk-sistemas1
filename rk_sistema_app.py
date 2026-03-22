@@ -82,10 +82,6 @@ class App(CTk):
 
         self.login_screen()
 
-    # =========================================================
-    # VISUAL
-    # =========================================================
-
     def _carregar_logo(self):
         logo_path = "logo.png"
         if os.path.exists(logo_path):
@@ -93,7 +89,7 @@ class App(CTk):
                 img = Image.open(logo_path)
                 self.logo_top = CTkImage(light_image=img, dark_image=img, size=(110, 55))
                 self.logo_login = CTkImage(light_image=img, dark_image=img, size=(180, 90))
-                self.logo_bg = CTkImage(light_image=img, dark_image=img, size=(800, 400))
+                self.logo_bg = CTkImage(light_image=img, dark_image=img, size=(900, 450))
             except Exception:
                 self.logo_top = None
                 self.logo_login = None
@@ -143,10 +139,6 @@ class App(CTk):
             **kwargs
         )
 
-    # =========================================================
-    # API
-    # =========================================================
-
     def request_json(self, method, url, **kwargs):
         r = requests.request(method, url, timeout=30, **kwargs)
         try:
@@ -181,10 +173,6 @@ class App(CTk):
         if self.usuario_tipo != "colaborador":
             return True
         return bool(self.permissoes_colaborador.get(perm, False))
-
-    # =========================================================
-    # LOGIN
-    # =========================================================
 
     def login_screen(self):
         self.clear()
@@ -281,10 +269,6 @@ class App(CTk):
             self.permissoes_colaborador = data.get("permissoes", {})
             self.colaborador_dashboard_screen()
 
-    # =========================================================
-    # SHELL
-    # =========================================================
-
     def build_shell(self, title):
         self.clear()
 
@@ -346,11 +330,7 @@ class App(CTk):
         self.content = CTkFrame(main, fg_color="transparent")
         self.content.pack(side="right", fill="both", expand=True)
 
-        self._marca_dagua(self.content, relx=0.65, rely=0.55)
-
-    # =========================================================
-    # SIDEBARS
-    # =========================================================
+        self._marca_dagua(self.content, relx=0.50, rely=0.50)
 
     def admin_sidebar(self):
         for w in self.sidebar.winfo_children():
@@ -402,10 +382,6 @@ class App(CTk):
                 ).pack(fill="x", padx=12, pady=4)
                 idx += 1
 
-    # =========================================================
-    # POPUP CONFIG
-    # =========================================================
-
     def config_popup(self):
         top = CTkToplevel(self)
         top.title("Configurações")
@@ -422,10 +398,6 @@ class App(CTk):
         self._botao(frame, "Pagamentos", lambda: self.placeholder_screen("Pagamentos"), color=COR_VERDE, hover=COR_VERDE_HOVER, width=240).pack(pady=6)
         self._botao(frame, "Integrações", lambda: self.placeholder_screen("Integrações"), color=COR_LARANJA, hover=COR_LARANJA_HOVER, width=240).pack(pady=6)
         self._botao(frame, "Fechar", top.destroy, color=COR_VERMELHO, hover=COR_VERMELHO_HOVER, width=240).pack(pady=14)
-
-    # =========================================================
-    # ADMIN
-    # =========================================================
 
     def admin_empresas_screen(self):
         self._current_screen = self.admin_empresas_screen
@@ -544,10 +516,6 @@ class App(CTk):
 
         self._botao(frame, "Salvar módulos", salvar, color=COR_VERDE, hover=COR_VERDE_HOVER).pack(pady=15)
 
-    # =========================================================
-    # EMPRESA
-    # =========================================================
-
     def dashboard_screen(self):
         self._current_screen = self.dashboard_screen
         self.load_empresa_context()
@@ -574,10 +542,6 @@ class App(CTk):
         self._botao(resumo, "Cadastro", self.cadastro_screen, color=COR_VERDE, hover=COR_VERDE_HOVER, width=180, height=46).pack(side="left", padx=6)
         self._botao(resumo, "Operação", self.operacao_screen, color=COR_LARANJA, hover=COR_LARANJA_HOVER, width=180, height=46).pack(side="left", padx=6)
         self._botao(resumo, "Relatórios", lambda: self.placeholder_screen("Relatórios"), color=COR_CINZA, hover=COR_CINZA_HOVER, width=180, height=46).pack(side="left", padx=6)
-
-    # =========================================================
-    # CADASTRO
-    # =========================================================
 
     def cadastro_screen(self):
         self._current_screen = self.cadastro_screen
@@ -770,10 +734,6 @@ class App(CTk):
 
         self._botao(frame, "Salvar permissões", salvar, color=COR_VERDE, hover=COR_VERDE_HOVER).pack(pady=15)
 
-    # =========================================================
-    # OPERAÇÃO
-    # =========================================================
-
     def operacao_screen(self):
         self._current_screen = self.operacao_screen
         self.build_shell("Operação")
@@ -820,10 +780,6 @@ class App(CTk):
         self.empresa_sidebar()
         self._simple_box("KDS Bar", "Tela KDS Bar mantida dentro de Operação.")
 
-    # =========================================================
-    # COLABORADOR
-    # =========================================================
-
     def colaborador_dashboard_screen(self):
         self._current_screen = self.colaborador_dashboard_screen
         self.build_shell("Colaborador - Dashboard")
@@ -854,10 +810,6 @@ class App(CTk):
         box.pack(fill="both", expand=True, padx=20, pady=20)
         self._titulo_card(box, titulo)
         CTkLabel(box, text=f"Tela liberada para {self.usuario_nome}.", text_color=COR_SUBTEXTO).pack(anchor="w", padx=14, pady=8)
-
-    # =========================================================
-    # HELPERS DE TELA
-    # =========================================================
 
     def _render_submenu(self, titulo, botoes):
         box = self._card(self.content)
