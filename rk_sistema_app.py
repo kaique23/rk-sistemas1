@@ -50,7 +50,7 @@ class App(CTk):
     def __init__(self):
         super().__init__()
         self.title("GSI Sistemas")
-        self.geometry("1550x900")
+        self.geometry("1550x920")
         self.configure(fg_color=COR_FUNDO)
 
         self.api = "https://rk-sistemas1.onrender.com"
@@ -66,6 +66,7 @@ class App(CTk):
         self.sidebar = None
         self.content = None
         self._current_screen = None
+        self._current_empresa_admin = None
 
         self.logo_top = None
         self.logo_login = None
@@ -74,6 +75,8 @@ class App(CTk):
         self._carregar_logo()
 
         self.login_screen()
+
+    # ================= VISUAL =================
 
     def _gerar_logo_transparente(self, img_rgba, alpha=35):
         nova = img_rgba.copy().convert("RGBA")
@@ -105,7 +108,21 @@ class App(CTk):
         return CTkFrame(parent, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
 
     def _botao(self, parent, text, command, color=COR_AZUL, hover=COR_AZUL_HOVER, **kwargs):
-        return CTkButton(parent, text=text, command=command, fg_color=color, hover_color=hover, text_color="white", corner_radius=10, **kwargs)
+        return CTkButton(
+            parent,
+            text=text,
+            command=command,
+            fg_color=color,
+            hover_color=hover,
+            text_color="white",
+            corner_radius=10,
+            **kwargs,
+        )
+
+    def _titulo(self, parent, texto):
+        CTkLabel(parent, text=texto, font=("Arial", 22, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=14, pady=(14, 8))
+
+    # ================= API =================
 
     def request_json(self, method, url, **kwargs):
         r = requests.request(method, url, timeout=30, **kwargs)
@@ -122,14 +139,6 @@ class App(CTk):
             msg = str(data)
         messagebox.showerror(title, msg)
 
-    def logout(self):
-        if self.token:
-            try:
-                self.request_json("POST", f"{self.api}/empresa/logout", json={"token": self.token})
-            except Exception:
-                pass
-        self.login_screen()
-
     def refresh_screen(self):
         if callable(self._current_screen):
             self._current_screen()
@@ -145,6 +154,16 @@ class App(CTk):
         if self.usuario_tipo != "colaborador":
             return True
         return bool(self.permissoes_colaborador.get(perm, False))
+
+    def logout(self):
+        if self.token:
+            try:
+                self.request_json("POST", f"{self.api}/empresa/logout", json={"token": self.token})
+            except Exception:
+                pass
+        self.login_screen()
+
+    # ================= LOGIN =================
 
     def login_screen(self):
         self.clear()
@@ -191,14 +210,14 @@ class App(CTk):
         self.api = self.login_api.get().strip()
         email = self.login_email.get().strip()
         senha = self.login_senha.get().strip()
-        tipo_escolhido = self.tipo_login.get()
+        tipo = self.tipo_login.get()
 
-        rota_principal = {
+        rota = {
             "empresa": "/empresa/login",
             "colaborador": "/colaborador/login",
-        }[tipo_escolhido]
+        }[tipo]
 
-        r, data = self.request_json("POST", f"{self.api}{rota_principal}", json={"email": email, "senha": senha})
+        r, data = self.request_json("POST", f"{self.api}{rota}", json={"email": email, "senha": senha})
 
         if r.status_code != 200:
             r_admin, data_admin = self.request_json("POST", f"{self.api}/admin/login", json={"email": email, "senha": senha})
@@ -214,11 +233,11 @@ class App(CTk):
             return
 
         self.token = data["token"]
-        self.usuario_tipo = tipo_escolhido
+        self.usuario_tipo = tipo
         self.usuario_nome = data.get("nome", "")
         self.usuario_cargo = data.get("cargo", "")
 
-        if self.usuario_tipo == "empresa":
+        if tipo == "empresa":
             self.load_empresa_context()
             if not self.usuario_nome:
                 self.usuario_nome = "Admin do Estabelecimento"
@@ -227,6 +246,8 @@ class App(CTk):
         else:
             self.permissoes_colaborador = data.get("permissoes", {})
             self.colaborador_dashboard_screen()
+
+    # ================= LAYOUT =================
 
     def build_shell(self, title):
         self.clear()
@@ -269,6 +290,8 @@ class App(CTk):
 
         self._marca_dagua(self.content, 0.50, 0.50)
 
+    # ================= SIDEBARS =================
+
     def admin_sidebar(self):
         for w in self.sidebar.winfo_children():
             w.destroy()
@@ -281,7 +304,8 @@ class App(CTk):
 
         CTkLabel(self.sidebar, text="Empresa", font=("Arial", 18, "bold"), text_color=COR_TEXTO).pack(pady=15)
         self._botao(self.sidebar, "Dashboard", self.dashboard_screen, COR_AZUL, COR_AZUL_HOVER).pack(fill="x", padx=12, pady=4)
-        self._botao(self.sidebar, "Cadastro", self.cadastro_screen, COR_VERDE, COR_VERDE_HOVER).pack(fill="x", padx=12, pady=4)
+        self._botao(self.sidebar, "Frente de Caixa", self.frente_caixa_screen, COR_VERDE, COR_VERDE_HOVER).pack(fill="x", padx=12, pady=4)
+        self._botao(self.sidebar, "Cadastro", self.cadastro_screen, COR_AZUL, COR_AZUL_HOVER).pack(fill="x", padx=12, pady=4)
         self._botao(self.sidebar, "Operação", self.operacao_screen, COR_LARANJA, COR_LARANJA_HOVER).pack(fill="x", padx=12, pady=4)
         self._botao(self.sidebar, "Relatórios", lambda: self.placeholder_screen("Relatórios"), COR_CINZA, COR_CINZA_HOVER).pack(fill="x", padx=12, pady=4)
         self._botao(self.sidebar, "WhatsApp", lambda: self.placeholder_screen("WhatsApp"), COR_VERDE, COR_VERDE_HOVER).pack(fill="x", padx=12, pady=4)
@@ -304,14 +328,105 @@ class App(CTk):
                 self._botao(self.sidebar, label, lambda l=label: self.placeholder_screen(l), cor, hov).pack(fill="x", padx=12, pady=4)
                 idx += 1
 
+    # ================= HELPERS CRUD =================
+
+    def _crud_simples(self, titulo, rota_post, rota_get, campos, sidebar="empresa"):
+        self._current_screen = lambda: self._crud_simples(titulo, rota_post, rota_get, campos, sidebar)
+        self.build_shell(titulo)
+
+        if sidebar == "empresa":
+            self.empresa_sidebar()
+        else:
+            self.admin_sidebar()
+
+        left = self._card(self.content)
+        left.configure(width=420)
+        left.pack(side="left", fill="y", padx=(10, 5), pady=10)
+        left.pack_propagate(False)
+
+        right = CTkScrollableFrame(self.content, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
+        right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
+
+        self._titulo(left, f"Novo {titulo[:-1] if titulo.endswith('s') else titulo}")
+
+        entries = {}
+        for chave, label in campos:
+            ent = CTkEntry(left, placeholder_text=label, width=320)
+            ent.pack(pady=6)
+            entries[chave] = ent
+
+        def salvar():
+            payload = {"token": self.token}
+            for chave in entries:
+                valor = entries[chave].get().strip()
+                if chave == "numero":
+                    try:
+                        payload[chave] = int(valor)
+                    except Exception:
+                        messagebox.showwarning("Aviso", "Número inválido")
+                        return
+                else:
+                    payload[chave] = valor
+
+            r, data = self.request_json("POST", f"{self.api}{rota_post}", json=payload)
+            if r.status_code != 200:
+                self.api_error("Erro", data)
+                return
+
+            messagebox.showinfo("Sucesso", data.get("msg", "Salvo com sucesso"))
+            self._crud_simples(titulo, rota_post, rota_get, campos, sidebar)
+
+        self._botao(left, "Salvar", salvar, COR_VERDE, COR_VERDE_HOVER).pack(pady=12)
+
+        r, data = self.request_json("GET", f"{self.api}{rota_get}", params={"token": self.token})
+        if r.status_code != 200:
+            self.api_error("Erro", data)
+            return
+
+        for row in data:
+            card = self._card(right)
+            card.pack(fill="x", padx=5, pady=5)
+            texto = " | ".join([f"{k}: {row.get(k, '')}" for k, _ in campos if k in row])
+            CTkLabel(card, text=texto or str(row), text_color=COR_TEXTO, wraplength=900, justify="left").pack(anchor="w", padx=10, pady=10)
+
+    # ================= EMPRESA =================
+
     def dashboard_screen(self):
         self._current_screen = self.dashboard_screen
+        self.load_empresa_context()
         self.build_shell("Dashboard")
         self.empresa_sidebar()
 
         box = self._card(self.content)
         box.pack(fill="both", expand=True, padx=20, pady=20)
-        CTkLabel(box, text="Dashboard", font=("Arial", 24, "bold"), text_color=COR_TEXTO).pack(pady=20)
+        self._titulo(box, "Dashboard")
+        CTkLabel(box, text=f"Plano: {self.plano_nome}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=14, pady=4)
+
+    def frente_caixa_screen(self):
+        self._current_screen = self.frente_caixa_screen
+        self.build_shell("Frente de Caixa")
+        self.empresa_sidebar()
+
+        box = self._card(self.content)
+        box.pack(fill="both", expand=True, padx=20, pady=20)
+
+        self._titulo(box, "Frente de Caixa")
+
+        linha = CTkFrame(box, fg_color="transparent")
+        linha.pack(fill="x", padx=14, pady=10)
+
+        self._botao(linha, "Clientes", self.clientes_screen, COR_VERDE, COR_VERDE_HOVER, width=150).pack(side="left", padx=5)
+        self._botao(linha, "Mesas", self.mesas_screen, COR_AZUL, COR_AZUL_HOVER, width=150).pack(side="left", padx=5)
+        self._botao(linha, "Comandas", self.placeholder_screen_comandas, COR_LARANJA, COR_LARANJA_HOVER, width=150).pack(side="left", padx=5)
+        self._botao(linha, "Pedidos", self.placeholder_screen_pedidos, COR_CINZA, COR_CINZA_HOVER, width=150).pack(side="left", padx=5)
+
+        CTkLabel(
+            box,
+            text="Tela inicial do caixa restaurada. Agora ela voltou para o menu principal.",
+            text_color=COR_SUBTEXTO,
+            wraplength=1000,
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=10)
 
     def cadastro_screen(self):
         self._current_screen = self.cadastro_screen
@@ -320,13 +435,15 @@ class App(CTk):
 
         box = self._card(self.content)
         box.pack(fill="both", expand=True, padx=20, pady=20)
+        self._titulo(box, "Cadastro")
+
         linha = CTkFrame(box, fg_color="transparent")
         linha.pack(pady=20)
 
-        self._botao(linha, "Cliente", self.placeholder_screen_clientes, COR_VERDE, COR_VERDE_HOVER, width=160).pack(side="left", padx=6)
-        self._botao(linha, "Fornecedor", self.placeholder_screen_fornecedores, COR_VERDE, COR_VERDE_HOVER, width=160).pack(side="left", padx=6)
-        self._botao(linha, "Colabora", self.placeholder_screen_colaboradores, COR_AZUL, COR_AZUL_HOVER, width=160).pack(side="left", padx=6)
-        self._botao(linha, "Entregadores", self.placeholder_screen_entregadores, COR_LARANJA, COR_LARANJA_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Cliente", self.clientes_screen, COR_VERDE, COR_VERDE_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Fornecedor", self.fornecedores_screen, COR_VERDE, COR_VERDE_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Colabora", self.colaboradores_screen, COR_AZUL, COR_AZUL_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Entregadores", self.entregadores_screen, COR_LARANJA, COR_LARANJA_HOVER, width=160).pack(side="left", padx=6)
         self._botao(linha, "Empresa", self.placeholder_screen_empresa, COR_CINZA, COR_CINZA_HOVER, width=160).pack(side="left", padx=6)
 
     def operacao_screen(self):
@@ -336,14 +453,141 @@ class App(CTk):
 
         box = self._card(self.content)
         box.pack(fill="both", expand=True, padx=20, pady=20)
+        self._titulo(box, "Operação")
+
         linha = CTkFrame(box, fg_color="transparent")
         linha.pack(pady=20)
 
-        self._botao(linha, "Mesa", lambda: self.placeholder_screen("Mesa"), COR_VERDE, COR_VERDE_HOVER, width=160).pack(side="left", padx=6)
-        self._botao(linha, "Pedido", lambda: self.placeholder_screen("Pedido"), COR_LARANJA, COR_LARANJA_HOVER, width=160).pack(side="left", padx=6)
-        self._botao(linha, "Comandas", lambda: self.placeholder_screen("Comandas"), COR_AZUL, COR_AZUL_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Mesa", self.mesas_screen, COR_VERDE, COR_VERDE_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Pedido", self.placeholder_screen_pedidos, COR_LARANJA, COR_LARANJA_HOVER, width=160).pack(side="left", padx=6)
+        self._botao(linha, "Comandas", self.placeholder_screen_comandas, COR_AZUL, COR_AZUL_HOVER, width=160).pack(side="left", padx=6)
         self._botao(linha, "KDS Cozinha", lambda: self.placeholder_screen("KDS Cozinha"), COR_CINZA, COR_CINZA_HOVER, width=160).pack(side="left", padx=6)
         self._botao(linha, "KDS Bar", lambda: self.placeholder_screen("KDS Bar"), COR_CINZA, COR_CINZA_HOVER, width=160).pack(side="left", padx=6)
+
+    def clientes_screen(self):
+        self._crud_simples(
+            titulo="Clientes",
+            rota_post="/clientes",
+            rota_get="/clientes",
+            campos=[
+                ("nome", "Nome"),
+                ("telefone", "Telefone"),
+                ("email", "Email"),
+                ("documento", "Documento"),
+                ("endereco", "Endereço"),
+                ("observacoes", "Observações"),
+            ],
+        )
+
+    def fornecedores_screen(self):
+        self._crud_simples(
+            titulo="Fornecedores",
+            rota_post="/fornecedores",
+            rota_get="/fornecedores",
+            campos=[
+                ("nome", "Nome"),
+                ("telefone", "Telefone"),
+                ("email", "Email"),
+                ("documento", "Documento"),
+                ("observacoes", "Observações"),
+            ],
+        )
+
+    def entregadores_screen(self):
+        self._crud_simples(
+            titulo="Entregadores",
+            rota_post="/entregadores",
+            rota_get="/entregadores",
+            campos=[
+                ("nome", "Nome"),
+                ("telefone", "Telefone"),
+            ],
+        )
+
+    def mesas_screen(self):
+        self._crud_simples(
+            titulo="Mesas",
+            rota_post="/mesas",
+            rota_get="/mesas",
+            campos=[("numero", "Número da mesa")],
+        )
+
+    def colaboradores_screen(self):
+        self._current_screen = self.colaboradores_screen
+        self.build_shell("Colaboradores")
+        self.empresa_sidebar()
+
+        left = self._card(self.content)
+        left.configure(width=420)
+        left.pack(side="left", fill="y", padx=(10, 5), pady=10)
+        left.pack_propagate(False)
+
+        right = CTkScrollableFrame(self.content, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
+        right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
+
+        self._titulo(left, "Novo colaborador")
+
+        self.col_nome = CTkEntry(left, placeholder_text="Nome", width=320)
+        self.col_nome.pack(pady=6)
+
+        self.col_tel = CTkEntry(left, placeholder_text="Telefone", width=320)
+        self.col_tel.pack(pady=6)
+
+        self.col_email = CTkEntry(left, placeholder_text="Email", width=320)
+        self.col_email.pack(pady=6)
+
+        self.col_senha = CTkEntry(left, placeholder_text="Senha", width=320)
+        self.col_senha.pack(pady=6)
+
+        self.col_cargo = CTkEntry(left, placeholder_text="Cargo", width=320)
+        self.col_cargo.pack(pady=6)
+
+        CTkLabel(left, text="Permissões", font=("Arial", 16, "bold"), text_color=COR_TEXTO).pack(pady=(12, 8))
+
+        self.col_vars = {}
+        perms_frame = CTkScrollableFrame(left, width=340, height=300, fg_color=COR_CARD_2)
+        perms_frame.pack(pady=5)
+
+        for key, label in PERMISSOES_COLABORADOR:
+            var = BooleanVar(value=False)
+            CTkCheckBox(perms_frame, text=label, variable=var, onvalue=True, offvalue=False).pack(anchor="w", pady=4)
+            self.col_vars[key] = var
+
+        def salvar():
+            permissoes = {k: bool(v.get()) for k, v in self.col_vars.items()}
+            r, data = self.request_json(
+                "POST",
+                f"{self.api}/colaboradores",
+                json={
+                    "token": self.token,
+                    "nome": self.col_nome.get().strip(),
+                    "telefone": self.col_tel.get().strip(),
+                    "email": self.col_email.get().strip(),
+                    "senha": self.col_senha.get().strip(),
+                    "cargo": self.col_cargo.get().strip() or "Colaborador",
+                    "permissoes": permissoes,
+                },
+            )
+            if r.status_code != 200:
+                self.api_error("Erro", data)
+                return
+            messagebox.showinfo("Sucesso", data.get("msg", "Colaborador criado"))
+            self.colaboradores_screen()
+
+        self._botao(left, "Salvar Colaborador", salvar, COR_VERDE, COR_VERDE_HOVER).pack(pady=12)
+
+        r, data = self.request_json("GET", f"{self.api}/colaboradores", params={"token": self.token})
+        if r.status_code != 200:
+            self.api_error("Erro", data)
+            return
+
+        for col in data:
+            card = self._card(right)
+            card.pack(fill="x", padx=5, pady=5)
+            CTkLabel(card, text=f"{col['nome']} | {col['cargo']}", font=("Arial", 15, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=10, pady=(10, 3))
+            CTkLabel(card, text=f"{col['email']} | {'Ativo' if col['ativo'] else 'Inativo'}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(0, 10))
+
+    # ================= ADMIN =================
 
     def admin_empresas_screen(self):
         self._current_screen = self.admin_empresas_screen
@@ -357,6 +601,8 @@ class App(CTk):
 
         right = CTkScrollableFrame(self.content, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
+
+        self._titulo(left, "Criar empresa")
 
         self.admin_nome = CTkEntry(left, placeholder_text="Nome da empresa", width=300)
         self.admin_nome.pack(pady=6)
@@ -395,8 +641,8 @@ class App(CTk):
 
             CTkLabel(card, text=f"{emp['nome']} | ID {emp['id']}", font=("Arial", 16, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=10, pady=(10, 2))
             CTkLabel(card, text=f"Email: {emp['email']}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10)
-            CTkLabel(card, text=f"Plano: {emp.get('plano_nome')} | Status: {emp.get('status')}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10)
-            CTkLabel(card, text=f"Terminais: {emp.get('limite_terminais')} | Impressoras: {emp.get('limite_impressoras')}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(0, 8))
+            CTkLabel(card, text=f"Plano: {emp.get('plano_nome', '-')} | Status: {emp.get('status', '-')}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10)
+            CTkLabel(card, text=f"Limite de terminais: {emp.get('limite_terminais', 1)} | Limite de impressoras: {emp.get('limite_impressoras', 0)}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(0, 8))
 
             btns = CTkFrame(card, fg_color="transparent")
             btns.pack(anchor="e", padx=10, pady=(0, 10))
@@ -442,22 +688,24 @@ class App(CTk):
 
     def admin_limites_popup(self, empresa):
         top = CTkToplevel(self)
-        top.title(f"Terminais - {empresa['nome']}")
-        top.geometry("420x280")
+        top.title(f"Terminais e Impressoras - {empresa['nome']}")
+        top.geometry("460x330")
         top.configure(fg_color=COR_FUNDO)
 
         frame = self._card(top)
         frame.pack(fill="both", expand=True, padx=12, pady=12)
 
-        CTkLabel(frame, text=empresa["nome"], font=("Arial", 20, "bold"), text_color=COR_TEXTO).pack(pady=10)
+        self._titulo(frame, empresa["nome"])
 
+        CTkLabel(frame, text="Quantidade de terminais liberados", text_color=COR_TEXTO).pack(anchor="w", padx=20, pady=(6, 2))
         terminais = CTkOptionMenu(frame, values=[str(i) for i in range(1, 21)], width=260)
         terminais.set(str(empresa.get("limite_terminais", 1)))
-        terminais.pack(pady=8)
+        terminais.pack(padx=20, pady=4, anchor="w")
 
+        CTkLabel(frame, text="Quantidade de impressoras liberadas", text_color=COR_TEXTO).pack(anchor="w", padx=20, pady=(12, 2))
         impressoras = CTkOptionMenu(frame, values=[str(i) for i in range(0, 21)], width=260)
         impressoras.set(str(empresa.get("limite_impressoras", 0)))
-        impressoras.pack(pady=8)
+        impressoras.pack(padx=20, pady=4, anchor="w")
 
         def salvar():
             r, data = self.request_json(
@@ -477,18 +725,20 @@ class App(CTk):
             top.destroy()
             self.admin_empresas_screen()
 
-        self._botao(frame, "Salvar", salvar, COR_VERDE, COR_VERDE_HOVER, width=260).pack(pady=16)
+        self._botao(frame, "Salvar limites", salvar, COR_VERDE, COR_VERDE_HOVER, width=260).pack(pady=20)
 
     def admin_impressoras_popup(self, empresa):
         top = CTkToplevel(self)
         top.title(f"Impressoras - {empresa['nome']}")
-        top.geometry("720x620")
+        top.geometry("760x620")
         top.configure(fg_color=COR_FUNDO)
 
         left = self._card(top)
         left.pack(side="left", fill="y", padx=(10, 5), pady=10)
         right = CTkScrollableFrame(top, fg_color=COR_CARD, corner_radius=14, border_width=1, border_color=COR_BORDA)
         right.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
+
+        self._titulo(left, "Nova impressora")
 
         nome = CTkEntry(left, placeholder_text="Nome", width=260)
         nome.pack(pady=6)
@@ -531,7 +781,9 @@ class App(CTk):
             card = self._card(right)
             card.pack(fill="x", padx=5, pady=5)
             CTkLabel(card, text=f"{imp['nome']} | {imp['tipo']}", font=("Arial", 16, "bold"), text_color=COR_TEXTO).pack(anchor="w", padx=10, pady=(10, 2))
-            CTkLabel(card, text=f"Conexão: {imp.get('conexao', '')}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(0, 10))
+            CTkLabel(card, text=f"Conexão: {imp.get('conexao', '')} | Modelo: {imp.get('modelo', '')}", text_color=COR_SUBTEXTO).pack(anchor="w", padx=10, pady=(0, 10))
+
+    # ================= COLABORADOR =================
 
     def colaborador_dashboard_screen(self):
         self._current_screen = self.colaborador_dashboard_screen
@@ -540,8 +792,10 @@ class App(CTk):
 
         box = self._card(self.content)
         box.pack(fill="both", expand=True, padx=20, pady=20)
-        CTkLabel(box, text=f"Bem-vindo, {self.usuario_nome}", font=("Arial", 24, "bold"), text_color=COR_TEXTO).pack(pady=15)
-        CTkLabel(box, text=f"Cargo: {self.usuario_cargo}", font=("Arial", 18), text_color=COR_SUBTEXTO).pack(pady=6)
+        self._titulo(box, f"Bem-vindo, {self.usuario_nome}")
+        CTkLabel(box, text=f"Cargo: {self.usuario_cargo}", font=("Arial", 18), text_color=COR_SUBTEXTO).pack(anchor="w", padx=14, pady=6)
+
+    # ================= PLACEHOLDERS =================
 
     def placeholder_screen(self, titulo):
         self._current_screen = lambda: self.placeholder_screen(titulo)
@@ -553,22 +807,16 @@ class App(CTk):
 
         box = self._card(self.content)
         box.pack(fill="both", expand=True, padx=20, pady=20)
-        CTkLabel(box, text=titulo, font=("Arial", 24, "bold"), text_color=COR_TEXTO).pack(pady=20)
-
-    def placeholder_screen_clientes(self):
-        self.placeholder_screen("Cliente")
-
-    def placeholder_screen_fornecedores(self):
-        self.placeholder_screen("Fornecedor")
-
-    def placeholder_screen_colaboradores(self):
-        self.placeholder_screen("Colabora")
-
-    def placeholder_screen_entregadores(self):
-        self.placeholder_screen("Entregadores")
+        self._titulo(box, titulo)
 
     def placeholder_screen_empresa(self):
         self.placeholder_screen("Empresa")
+
+    def placeholder_screen_comandas(self):
+        self.placeholder_screen("Comandas")
+
+    def placeholder_screen_pedidos(self):
+        self.placeholder_screen("Pedidos")
 
 
 if __name__ == "__main__":
