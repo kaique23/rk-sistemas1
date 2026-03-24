@@ -412,21 +412,43 @@ class App(CTk):
 
         self._titulo(box, "Frente de Caixa")
 
-        linha = CTkFrame(box, fg_color="transparent")
-        linha.pack(fill="x", padx=14, pady=10)
+        topo = CTkFrame(box, fg_color="transparent")
+        topo.pack(fill="x", padx=14, pady=10)
 
-        self._botao(linha, "Clientes", self.clientes_screen, COR_VERDE, COR_VERDE_HOVER, width=150).pack(side="left", padx=5)
-        self._botao(linha, "Mesas", self.mesas_screen, COR_AZUL, COR_AZUL_HOVER, width=150).pack(side="left", padx=5)
-        self._botao(linha, "Comandas", self.placeholder_screen_comandas, COR_LARANJA, COR_LARANJA_HOVER, width=150).pack(side="left", padx=5)
-        self._botao(linha, "Pedidos", self.placeholder_screen_pedidos, COR_CINZA, COR_CINZA_HOVER, width=150).pack(side="left", padx=5)
+        self._botao(topo, "Abrir Comanda", self.placeholder_screen_comandas, COR_AZUL, COR_AZUL_HOVER, width=150).pack(
+            side="left", padx=5)
+        self._botao(topo, "Lançar Pedido", self.placeholder_screen_pedidos, COR_LARANJA, COR_LARANJA_HOVER,
+                    width=150).pack(side="left", padx=5)
+        self._botao(topo, "Mesas", self.mesas_screen, COR_VERDE, COR_VERDE_HOVER, width=150).pack(side="left", padx=5)
+        self._botao(topo, "Clientes", self.clientes_screen, COR_CINZA, COR_CINZA_HOVER, width=150).pack(side="left",
+                                                                                                        padx=5)
 
-        CTkLabel(
-            box,
-            text="Tela inicial do caixa restaurada. Agora ela voltou para o menu principal.",
-            text_color=COR_SUBTEXTO,
-            wraplength=1000,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=10)
+        info = CTkFrame(box, fg_color=COR_CARD_2, corner_radius=12)
+        info.pack(fill="x", padx=14, pady=10)
+
+        CTkLabel(info, text="Resumo do Caixa", font=("Arial", 18, "bold"), text_color=COR_TEXTO).pack(anchor="w",
+                                                                                                      padx=12,
+                                                                                                      pady=(12, 6))
+        CTkLabel(info, text="Pedidos do balcão, fechamento de conta e cupom fiscal ficarão centralizados aqui.",
+                 text_color=COR_SUBTEXTO).pack(anchor="w", padx=12, pady=(0, 12))
+
+        grade = CTkFrame(box, fg_color="transparent")
+        grade.pack(fill="both", expand=True, padx=14, pady=10)
+
+        card1 = self._card(grade)
+        card1.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        CTkLabel(card1, text="Comandas em aberto", font=("Arial", 16, "bold"), text_color=COR_TEXTO).pack(anchor="w",
+                                                                                                          padx=12,
+                                                                                                          pady=(12, 6))
+        CTkLabel(card1, text="Aqui você vai listar comandas abertas do caixa.", text_color=COR_SUBTEXTO).pack(
+            anchor="w", padx=12, pady=(0, 12))
+
+        card2 = self._card(grade)
+        card2.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        CTkLabel(card2, text="Fechamento / pagamento", font=("Arial", 16, "bold"), text_color=COR_TEXTO).pack(
+            anchor="w", padx=12, pady=(12, 6))
+        CTkLabel(card2, text="Aqui entra pix, cartão, dinheiro e emissão fiscal.", text_color=COR_SUBTEXTO).pack(
+            anchor="w", padx=12, pady=(0, 12))
 
     def cadastro_screen(self):
         self._current_screen = self.cadastro_screen
